@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Отчёт этапа 1 — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+<section class="report">
+    <div class="report-head">
+        <a class="back-link" href="{{ url_for('dashboard') }}">← в кабинет</a>
+        <h1>Отчёт документного анализа</h1>
+        <p class="report-meta">
+            <b>{{ document.filename }}</b> · {{ report.doc_type_title }} ·
+            абзацев: {{ report.paragraphs_total }} ·
+            игр в файле: <b>{{ report.games_count }}</b>
+        </p>
+        {% if report.games_count > 1 %}
+        <p class="report-note">В файле обнаружено несколько игр — структура эталона повторяется. Каждая разобрана отдельно.</p>
+        {% endif %}
+    </div>
+
+    {% for game in report.games %}
+    <div class="game-block">
+        <div class="game-header">
+            <h2>{{ game.title }}</h2>
+            <div class="game-gauge">
+                <span class="gauge-pct">{{ game.structure_pct }}%</span>
+                <span class="gauge-label">структура · {{ game.found_count }}/{{ game.total }} разделов{% if game.warnings %} · {{ game.warnings }} замечаний{% endif %}</span>
+            </div>
+        </div>
+
+        <div class="sim-banner {{ 'sim-ok' if game.can_simulate else 'sim-stop' }}">
+            {% if game.can_simulate %}
+                ✅ Критичные для симуляции разделы на месте — можно переходить в конструктор.
+            {% else %}
+                🛑 Нельзя симулировать: заполните критичные разделы ({{ game.criticals }}) — они нужны движку.
+            {% endif %}
+        </div>
+
+        <div class="constructor-cta">
+            <a class="btn {{ 'btn-primary' if game.can_simulate else 'btn-ghost' }} btn-sm" href="{{ url_for('constructor', doc_id=document.id, game_index=game.index) }}">⚙️ Конструктор и симуляция →</a>
+        </div>
+
+        <div class="section-list">
+            {% for s in game.sections %}
+            <div class="section-row section-{{ s.status }}">
+                <span class="section-icon">{% if s.status == 'ok' %}✅{% elif s.status == 'warn' %}⚠️{% elif s.status == 'critical' %}🛑{% else %}❌{% endif %}</span>
+                <div class="section-body">
+                    <span class="section-name">{{ s.name }}{% if s.critical %} <span class="crit-tag">нужен для симуляции</span>{% endif %}</span>
+                    {% if s.found %}
+                        <span class="section-chars">{{ s.char_count }} симв.</span>
+                        {% set issues = [] %}
+                        {% if s.content_issue_label %}{% set issues = issues + [s.content_issue_label] %}{% endif %}
+                        {% if s.format_errors %}{% set issues = issues + s.format_errors %}{% endif %}
+                        {% if issues %}<span class="section-issues">{{ issues | join('; ') }}</span>{% endif %}
+                    {% else %}
+                        <span class="section-issues">раздел не найден{% if s.critical %} — обязателен{% endif %}</span>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if report.strict and report.formatting %}
+        <div class="fmt-block">
+            <h3>Оформление документа</h3>
+            <div class="fmt-grid">
+                <div class="fmt-item">
+                    <span class="fmt-label">Выравнивание по ширине</span>
+                    <span class="fmt-value">{% if report.formatting.justify_ratio is not none %}{{ (report.formatting.justify_ratio * 100) | round }}%{% else %}—{% endif %}</span>
+                </div>
+                <div class="fmt-item">
+                    <span class="fmt-label">Иерархия заголовков</span>
+                    <span class="fmt-value">{{ 'есть' if report.formatting.hierarchy_ok else 'нет' }}</span>
+                </div>
+                {% if report.formatting.margins %}
+                <div class="fmt-item">
+                    <span class="fmt-label">Поля (см), В/Н/Л/П</span>
+                    <span class="fmt-value">{{ report.formatting.margins.top }}/{{ report.formatting.margins.bottom }}/{{ report.formatting.margins.left }}/{{ report.formatting.margins.right }}</span>
+                </div>
+                {% endif %}
+            </div>
+            {% if report.formatting.issues %}
+            <ul class="fmt-issues">{% for i in report.formatting.issues %}<li>⚠️ {{ i }}</li>{% endfor %}</ul>
+            {% else %}
+            <p class="dash-note">Оформление в норме.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <p class="report-disclaimer">
+        Сервис проверяет готовность документа к оценке и подсвечивает математически
+        проверяемые проблемы. Финальное суждение о качестве игры остаётся за человеком.
+    </p>
+</section>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Вход — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+<section class="auth">
+    <div class="auth-card">
+        <div class="auth-head">
+            <span class="brand-mark">🔬</span>
+            <h1>Вход в систему</h1>
+            <p>Регистрация не нужна — войдите по данным, выданным на конкурсе.</p>
+        </div>
+
+        <form class="auth-form" method="post" action="{{ url_for('login') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+            <label class="field">
+                <span class="field-label">Telegram-ник</span>
+                <input class="field-input" type="text" name="tg_tag" value="{{ tg_tag }}"
+                       placeholder="@username" autocomplete="username" autofocus required>
+            </label>
+
+            <label class="field">
+                <span class="field-label">Пароль</span>
+                <input class="field-input" type="password" name="password"
+                       placeholder="ваш персональный код" autocomplete="current-password" required>
+            </label>
+
+            <button class="btn btn-primary btn-lg btn-block" type="submit">Войти</button>
+        </form>
+
+        <p class="auth-hint">Ник вводите с «@». Пароль — персональный набор символов из вашей заявки.</p>
+    </div>
+</section>
+{% endblock %}

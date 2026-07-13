@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Кабинет — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+<section class="dashboard">
+    <h1>Личный кабинет</h1>
+    <p class="dash-sub">Вы вошли как <b>{{ current_user.tg_tag }}</b>{% if current_user.is_admin %} · администратор{% endif %}.</p>
+
+    <div class="dash-card">
+        <h2>Загрузить документ на анализ</h2>
+        <p class="dash-note">Этап 1: проверка структуры и оформления, извлечение параметров игры. Файл <code>.docx</code> (эссе или карточка идей).</p>
+        <form class="upload-form" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+            <div class="doctype-row">
+                {% for key, info in doc_types.items() %}
+                <label class="doctype-option">
+                    <input type="radio" name="doc_type" value="{{ key }}" {% if loop.first %}checked{% endif %}>
+                    <span>{{ info.title }}</span>
+                </label>
+                {% endfor %}
+            </div>
+            <div class="upload-row">
+                <input class="file-input" type="file" name="file" accept=".docx" required>
+                <button class="btn btn-primary" type="submit">Анализировать</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="dash-card">
+        <h2>Мои документы</h2>
+        {% if documents %}
+        <table class="doc-table">
+            <thead>
+                <tr><th>Файл</th><th>Тип</th><th>Версия</th><th>Загружен</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for d in documents %}
+                <tr>
+                    <td>{{ d.filename }}</td>
+                    <td>{{ doc_types[d.doc_type].title if d.doc_type in doc_types else d.doc_type }}</td>
+                    <td>v{{ d.version }}</td>
+                    <td>{{ d.uploaded_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                    <td><a class="btn btn-ghost btn-sm" href="{{ url_for('games', doc_id=d.id) }}">Игры</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="dash-note">Пока ничего не загружено. Загрузите первый документ выше.</p>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

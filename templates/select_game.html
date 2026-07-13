@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Выбор игры — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+<section class="games-select">
+    <div class="gs-head">
+        <a class="back-link" href="{{ url_for('dashboard') }}">← в кабинет</a>
+        <h1>Какую игру анализировать?</h1>
+        <p class="report-meta">
+            <b>{{ document.filename }}</b> · {{ doc_types[document.doc_type].title if document.doc_type in doc_types else document.doc_type }}
+            {% if seg.games_count %} · найдено игр в файле: <b>{{ seg.games_count }}</b>{% endif %}
+        </p>
+        {% if seg.games_count > 1 %}
+        <p class="report-note">В файле несколько игр — структура шаблона повторяется. Выберите игру, чтобы запустить её документный анализ.</p>
+        {% endif %}
+    </div>
+
+    {% if seg.games_count == 0 %}
+    <div class="gs-empty">
+        <p>Структура шаблона в документе не распознана.</p>
+        <p class="dash-note">Возможно, выбран не тот тип (эссе / карточка идей) или разделы оформлены нестандартно. Вернитесь в кабинет и попробуйте загрузить с другим типом.</p>
+    </div>
+    {% else %}
+    <div class="gs-grid">
+        {% for g in seg.games %}
+        <article class="gs-card">
+            <div class="gs-card-head">
+                <span class="gs-num">Игра {{ g.index }}</span>
+                <span class="gs-chip {{ 'gs-chip-full' if g.structure_pct >= 80 else ('gs-chip-mid' if g.structure_pct >= 40 else 'gs-chip-low') }}">
+                    {{ g.found_count }}/{{ g.total }} разделов · {{ g.structure_pct }}%
+                </span>
+            </div>
+            {% if g.title_hint %}<h3 class="gs-title">{{ g.title_hint }}</h3>{% endif %}
+            <p class="gs-preview">{{ g.preview }}</p>
+            <div class="gs-foot">
+                <span class="gs-meta">{{ g.paragraphs }} абзацев</span>
+                <a class="btn btn-primary btn-sm" href="{{ url_for('report', doc_id=document.id, game_index=g.index) }}">Анализировать эту игру →</a>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

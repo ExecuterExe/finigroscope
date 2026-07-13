@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Конструктор — ФинИгроСкоп{% endblock %}
+
+{# ---------- макрос: скаляр ---------- #}
+{% macro control(f, value, css='js-val') %}
+    {% if f.type == 'select' %}
+        <select class="{{ css }} field-input">
+            {% for o in f.options %}
+                {% if o is string %}<option value="{{ o }}" {{ 'selected' if value == o }}>{{ o }}</option>
+                {% else %}<option value="{{ o.value }}" {{ 'selected' if value == o.value }}>{{ o.label }}</option>{% endif %}
+            {% endfor %}
+        </select>
+    {% elif f.type == 'bool' %}
+        <label class="switch switch-sm"><input class="{{ css }}" type="checkbox" {{ 'checked' if value }}><span class="slider"></span></label>
+    {% elif f.type == 'text' %}
+        <input class="{{ css }} field-input" type="text" value="{{ value if value is not none else '' }}" placeholder="{{ f.placeholder or '' }}">
+    {% else %}
+        <input class="{{ css }} field-input" type="number" value="{{ value if value is not none else '' }}"
+               {% if f.min is defined and f.min is not none %}min="{{ f.min }}"{% endif %}
+               {% if f.max is defined and f.max is not none %}max="{{ f.max }}"{% endif %}
+               {% if f.step is defined %}step="{{ f.step }}"{% endif %}>
+    {% endif %}
+{% endmacro %}
+
+{# ---------- макрос: строка таблицы ---------- #}
+{% macro row_markup(f, row) %}
+    <div class="row">
+        {% for c in f.columns %}
+        <span class="row-cell">
+            <input class="row-input field-input" data-col="{{ c.key }}" data-coltype="{{ c.type }}"
+                   {% if c.type == 'bool' %}type="checkbox" {{ 'checked' if row[c.key] }}
+                   {% elif c.type == 'text' %}type="text" value="{{ row[c.key] if row[c.key] is not none else '' }}" placeholder="{{ c.placeholder or '' }}"
+                   {% else %}type="number" value="{{ row[c.key] if row[c.key] is not none else '' }}"
+                       {% if c.min is defined %}min="{{ c.min }}"{% endif %}{% if c.max is defined %}max="{{ c.max }}"{% endif %}{% endif %}>
+        </span>
+        {% endfor %}
+        <button type="button" class="row-del" title="удалить">×</button>
+    </div>
+{% endmacro %}
+
+{# ---------- макрос: поле ---------- #}
+{% macro field_block(f) %}
+    <div class="field-block {{ 'field-wide' if f.type == 'rows' }}"
+         data-field="{{ f.key }}" data-type="{{ f.type }}"
+         {% if f.depends %}{% for dk, dv in f.depends.items() %}data-depends-field="{{ dk }}" data-depends-value="{{ dv }}"{% endfor %}{% endif %}>
+        <div class="field-label-row">
+            <span class="field-label">{{ f.label }}{% if f.auto %}<span class="auto-badge">из текста</span>{% endif %}</span>
+        </div>
+        {% if f.type == 'range' %}
+            <div class="range-inputs">
+                <input class="js-min field-input" type="number" value="{{ f.min_value if f.min_value is not none else '' }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %}>
+                <span class="range-sep">→</span>
+                <input class="js-max field-input" type="number" value="{{ f.max_value if f.max_value is not none else '' }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %}>
+            </div>
+        {% elif f.type == 'grid' %}
+            <div class="grid-control">
+                <label class="grid-mode"><input class="js-grid-known" type="checkbox" {{ 'checked' if f.mode == 'known' }}> значение известно</label>
+                <input class="js-grid-value field-input grid-known-input" type="number" value="{{ f.known_value }}" step="{{ f.step or 0.05 }}" {% if f.min is not none %}min="{{ f.min }}"{% endif %} {% if f.max is not none %}max="{{ f.max }}"{% endif %} {{ 'hidden' if f.mode != 'known' }}>
+                <input class="js-grid-scan field-input grid-scan-input" type="text" value="{{ f.scan_values | join(', ') }}" placeholder="0.4, 0.7, 0.9" {{ 'hidden' if f.mode == 'known' }}>
+                <span class="grid-hint">сетка для сканирования (через запятую) — Принцип 4</span>
+            </div>
+        {% elif f.type == 'rows' %}
+            <div class="rows-field" style="--cols: {{ f.columns | length }}">
+                <div class="rows-head">{% for c in f.columns %}<span>{{ c.label }}</span>{% endfor %}<span></span></div>
+                <div class="rows-body">{% for row in f.rows %}{{ row_markup(f, row) }}{% endfor %}</div>
+                <template class="row-tpl">{{ row_markup(f, {}) }}</template>
+                <button type="button" class="row-add">+ {{ f.row_label }}</button>
+            </div>
+        {% else %}{{ control(f, f.value) }}{% endif %}
+        {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+    </div>
+{% endmacro %}
+
+{% block content %}
+<section class="constructor"
+         data-save-url="{{ url_for('save_constructor', doc_id=document.id, game_index=game_index) }}"
+         data-sim-url="{{ url_for('simulate', doc_id=document.id, game_index=game_index) }}">
+
+    <div class="constructor-head">
+        <a class="back-link" href="{{ url_for('report', doc_id=document.id, game_index=game_index) }}">← к отчёту</a>
+        <h1>Конструктор игры <span class="head-game">· {{ game_title }}</span></h1>
+        <p class="report-meta">{{ document.filename }}{% if saved %} <span class="saved-chip">сохранено</span>{% endif %}</p>
+
+        <details class="howto" {{ 'open' if not saved and not preset_key }}>
+            <summary>Как это работает</summary>
+            <div class="howto-body">
+                <p>Симулируется <b>не вся игра, а её измеримый скелет</b>: что считаем, как ходят, как выигрывают. Творчество и вкус судьи не моделируются — они заменяются вероятностями.</p>
+                <ol>
+                    <li><b>Соберите игру из блоков</b> — включайте только те механики, что есть у вас. Игра = комбинация блоков, а не «тип».</li>
+                    <li><b>Задайте условие победы</b> — главное правило, от него зависит, что считает симуляция.</li>
+                    <li><b>Запустите симуляцию</b> справа — тысячи партий покажут перекосы, ничьи, длину партии (в <b>ходах</b>, не минутах) и дадут рецепты доработки.</li>
+                </ol>
+                <p class="howto-hint">Не знаете, с чего начать? Возьмите готовый шаблон ниже и подправьте под свою игру.</p>
+            </div>
+        </details>
+
+        {% if presets %}
+        <div class="presets-bar">
+            <span class="presets-label">Шаблоны:</span>
+            {% for p in presets %}
+            <a class="preset-btn {{ 'preset-active' if preset_key == p.key }}"
+               href="{{ url_for('constructor', doc_id=document.id, game_index=game_index, preset=p.key) }}"
+               title="{{ p.desc }}">{{ p.title }}</a>
+            {% endfor %}
+            {% if preset_key %}<a class="preset-clear" href="{{ url_for('constructor', doc_id=document.id, game_index=game_index) }}">× сбросить</a>{% endif %}
+        </div>
+        {% if preset_key %}<p class="report-note">Загружен шаблон — поправьте поля под свою игру и сохраните.</p>{% endif %}
+        {% endif %}
+    </div>
+
+    <div class="constructor-grid">
+        <!-- ЛЕВО: форма -->
+        <div class="constructor-main">
+            <div class="panel">
+                <h2 class="panel-title">Основное</h2>
+                <div class="fields-grid">
+                    <div class="field-block" id="players-field">
+                        <div class="field-label-row"><span class="field-label">{{ state.players.label }}{% if state.players.auto %}<span class="auto-badge">из текста</span>{% endif %}</span></div>
+                        <div class="range-inputs">
+                            <input id="players-min" class="field-input" type="number" value="{{ state.players.min_value }}" min="{{ state.players.min }}" max="{{ state.players.max }}">
+                            <span class="range-sep">→</span>
+                            <input id="players-max" class="field-input" type="number" value="{{ state.players.max_value }}" min="{{ state.players.min }}" max="{{ state.players.max }}">
+                        </div>
+                        <p class="field-help">{{ state.players.help }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel" id="win-panel">
+                <h2 class="panel-title">Условие победы</h2>
+                <p class="panel-sub">Главное правило игры — от него зависит, что считает симуляция.</p>
+                <div class="fields-grid">
+                    {{ field_block(state.win.type) }}
+                    {{ field_block(state.win.threshold) }}
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2 class="panel-title">Целевые показатели</h2>
+                <p class="panel-sub">Для сверки симуляцией и редизайна. Метрики — необходимое условие качества, но не достаточное.</p>
+                <div class="fields-grid" id="targets-grid">
+                    {% for f in state.targets %}{{ field_block(f) }}{% endfor %}
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2 class="panel-title">Блоки игры</h2>
+                <p class="panel-sub">Включите механики, которые есть в вашей игре. Игра = комбинация блоков.</p>
+                <div class="blocks-stack">
+                    {% for b in state.blocks %}
+                    <fieldset class="block {{ 'block-on' if b.enabled }}" data-block="{{ b.key }}">
+                        <div class="block-head">
+                            <span class="block-icon">{{ b.icon }}</span>
+                            <span class="block-meta"><span class="block-title">{{ b.title }}</span><span class="block-desc">{{ b.desc }}</span></span>
+                            <label class="switch"><input class="block-toggle" type="checkbox" {{ 'checked' if b.enabled }}><span class="slider"></span></label>
+                        </div>
+                        <div class="block-body" {{ '' if b.enabled else 'hidden' }}>
+                            <div class="fields-grid">{% for f in b.fields %}{{ field_block(f) }}{% endfor %}</div>
+                        </div>
+                    </fieldset>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- ПРАВО: сводка + JSON + действия -->
+        <aside class="constructor-side">
+            <div class="side-sticky">
+                <div class="panel side-summary">
+                    <h3 class="side-title">Скелет игры</h3>
+                    <div id="summary-chips" class="summary-chips"></div>
+                </div>
+                <div class="panel side-json">
+                    <div class="side-json-head">
+                        <h3 class="side-title">JSON-конфиг</h3>
+                        <button id="json-toggle" type="button" class="link-btn">свернуть</button>
+                    </div>
+                    <pre id="json-preview" class="json-preview"></pre>
+                </div>
+                <div class="side-actions">
+                    <button id="sim-btn" class="btn btn-primary btn-block btn-lg">▶ Запустить симуляцию</button>
+                    <button id="save-btn" class="btn btn-ghost btn-block">Сохранить конфигурацию</button>
+                    <span id="save-status" class="save-status"></span>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- РЕЗУЛЬТАТЫ -->
+    <section id="sim-results" class="sim-results" hidden>
+        <div class="results-head">
+            <h2>Результаты симуляции</h2>
+            <div class="results-meta">
+                <span id="results-summary"></span>
+                <label class="config-pick">конфигурация:
+                    <select id="config-select"></select>
+                </label>
+            </div>
+        </div>
+        <div id="metric-cards" class="metric-cards"></div>
+        <div class="charts-grid">
+            <div class="chart-card"><h4>Win rate по позиции хода</h4><canvas id="chart-winrate"></canvas></div>
+            <div class="chart-card"><h4>Длина партии (ходов на игрока)</h4><canvas id="chart-rounds"></canvas></div>
+            <div class="chart-card" id="sensitivity-card" hidden><h4>Чувствительность: перекос ↔ p верного ответа</h4><canvas id="chart-sensitivity"></canvas></div>
+            <div class="chart-card"><h4>Причины завершения</h4><canvas id="chart-reasons"></canvas></div>
+        </div>
+        <div class="findings-block">
+            <h3>Диагност: находки и рецепты</h3>
+            <div id="findings-list"></div>
+        </div>
+    </section>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/constructor.js') }}"></script>
+{% endblock %}
