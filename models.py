@@ -97,32 +97,3 @@ class Report(db.Model):
     def result(self) -> dict:
         import json
         return json.loads(self.result_json)
-
-
-class SimConfig(db.Model):
-    """Конфигурация конструктора блоков (этап 2) для одной игры из документа.
-
-    Файл может содержать несколько игр — поэтому конфиг привязан и к документу,
-    и к индексу игры (`game_index`). `config_json` хранит канонический словарь
-    (players / targets / blocks), `tunable_json` — параметры, разрешённые тюнеру.
-    """
-
-    __tablename__ = "sim_configs"
-
-    id = db.Column(db.Integer, primary_key=True)
-    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
-    game_index = db.Column(db.Integer, nullable=False, default=1)
-    config_json = db.Column(db.Text, nullable=False)
-    tunable_json = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    document = db.relationship("Document", backref="sim_configs")
-
-    __table_args__ = (
-        db.UniqueConstraint("document_id", "game_index", name="uq_simconfig_doc_game"),
-    )
-
-    def config(self) -> dict:
-        import json
-        return json.loads(self.config_json)

@@ -148,7 +148,7 @@ def split_games(paras, patterns):
 
     def new_game():
         nonlocal current, last_idx, last_section
-        current = {}
+        current = {"unmatched": []}
         last_idx = -1
         last_section = None
         games.append(current)
@@ -166,12 +166,72 @@ def split_games(paras, patterns):
             }
             last_idx = idx
             last_section = idx
-        elif current is not None and last_section is not None:
-            sect = current[last_section]
-            sect["char_count"] += len(para.text)
-            sect["content"] += " " + para.text
+        elif current is not None:
+            # абзац похож на заголовок, но не совпал с эталоном — кандидат в
+            # «переименованный раздел» (запоминаем, чтобы подсказать автору)
+            if _is_heading_candidate(para, signal):
+                current["unmatched"].append({"text": para.text, "after": last_idx})
+            if last_section is not None:
+                sect = current[last_section]
+                sect["char_count"] += len(para.text)
+                sect["content"] += " " + para.text
 
     return games
+
+
+def _is_heading_candidate(para, signal):
+    """Похож ли абзац на заголовок по разметке документа (даже без совпадения)."""
+    if signal == "style":
+        return para.is_heading_style
+    if signal == "bold":
+        return para.bold
+    return len(para.text) <= 90
+
+
+# --- подсказка «как раздел назван сейчас» -----------------------------------
+_TITLE_STOP = {
+    "и", "в", "во", "на", "по", "с", "со", "о", "об", "для", "из", "к", "у",
+    "опишите", "описать", "нарисуйте", "напишите", "ваш", "вашу", "ваша",
+    "игры", "игра", "игру", "определите", "какие", "это", "что", "как",
+}
+
+
+def _title_tokens(text):
+    norm = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", normalize(text))
+    toks = re.findall(r"[а-яёa-z]+", norm)
+    return [t for t in toks if len(t) >= 3 and t not in _TITLE_STOP]
+
+
+def _tok_match(a, b):
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n >= 4
+
+
+def _overlap(ref, cand):
+    if not ref:
+        return 0.0
+    hit = sum(1 for r in ref if any(_tok_match(r, c) for c in cand))
+    return hit / len(ref)
+
+
+def _suggest_renamed(name, ref_idx, unmatched):
+    """Ищет среди незасчитанных заголовков наиболее похожий на эталонный раздел."""
+    ref = _title_tokens(name)
+    if not ref:
+        return None
+    best, best_score, best_pos = None, 0.0, 10 ** 9
+    for u in unmatched:
+        score = _overlap(ref, _title_tokens(u["text"]))
+        if score < 0.5:
+            continue
+        pos = abs(u.get("after", -1) - (ref_idx - 1))
+        if score > best_score or (score == best_score and pos < best_pos):
+            best, best_score, best_pos = u["text"], score, pos
+    return best
 
 
 def segment_games(paras, patterns):
@@ -243,6 +303,7 @@ def evaluate_game(game, structure, parents, doc_type):
     """
     strict = strict_formatting(doc_type)
     critical = critical_indices(doc_type)
+    unmatched = game.get("unmatched", []) if isinstance(game, dict) else []
     sections = []
     found = warnings = criticals = 0
     can_simulate = True
@@ -260,6 +321,7 @@ def evaluate_game(game, structure, parents, doc_type):
                 "status": "critical" if is_critical else "missing",
                 "format_errors": [], "char_count": 0, "content_issue": "empty",
                 "style_applied": None,
+                "suggestion": _suggest_renamed(name, idx, unmatched),
             })
             continue
 
@@ -303,24 +365,6 @@ def evaluate_game(game, structure, parents, doc_type):
         "structure_pct": round(found / total * 100, 1) if total else 0.0,
         "clean_count": sum(1 for s in sections if s["status"] == "ok"),
     }
-
-
-def game_full_text(game) -> str:
-    """Весь текст игры (заголовки + содержимое) — вход для извлечения значений."""
-    parts = []
-    for data in game.values():
-        parts.append(data["header_para"].text)
-        if data["content"]:
-            parts.append(data["content"])
-    return " ".join(parts)
-
-
-def section_texts(game, structure) -> dict:
-    """Сопоставление имени эталонного раздела → его текст в этой игре."""
-    out = {}
-    for idx, data in game.items():
-        out[structure[idx]] = data["content"].strip()
-    return out
 
 
 def analyze_structure(source, structure, doc_type):

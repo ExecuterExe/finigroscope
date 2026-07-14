@@ -28,10 +28,7 @@ from werkzeug.utils import secure_filename
 
 from analysis import stage1
 from analysis.reference import DOC_TYPES
-from simulation import constructor as sim_constructor
-from simulation import runner as sim_runner
-from simulation.schema import BLOCKS
-from models import Document, Report, SimConfig, User, db
+from models import Document, Report, User, db
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 
@@ -271,93 +268,6 @@ def _owned_document(doc_id):
     if document.user_id != user.id and not user.is_admin:
         abort(403)
     return document
-
-
-@app.route("/documents/<int:doc_id>/constructor/<int:game_index>", methods=["GET"])
-@login_required
-def constructor(doc_id, game_index):
-    """Форма конструктора блоков для конкретной игры из документа."""
-    document = _owned_document(doc_id)
-    presets = sim_constructor.preset_list()
-    game_title = f"Игра {game_index}"
-
-    # пресет-шаблон по запросу — приоритетнее сохранённого/предзаполнения
-    preset_key = request.args.get("preset")
-    if preset_key:
-        preset_cfg = sim_constructor.get_preset(preset_key)
-        if preset_cfg:
-            form_state = sim_constructor.build_form_state(saved=preset_cfg)
-            return render_template("constructor.html", document=document, game_index=game_index,
-                                   game_title=game_title, state=form_state, blocks_meta=BLOCKS,
-                                   presets=presets, saved=False, preset_key=preset_key)
-
-    saved = SimConfig.query.filter_by(document_id=doc_id, game_index=game_index).first()
-    if saved:
-        form_state = sim_constructor.build_form_state(saved=saved.config())
-        return render_template("constructor.html", document=document, game_index=game_index,
-                               game_title=game_title, state=form_state,
-                               blocks_meta=BLOCKS, presets=presets, saved=True, preset_key=None)
-
-    # предзаполнение из этапа 1
-    stage1_report = (
-        Report.query.filter_by(document_id=doc_id, stage="1")
-        .order_by(Report.created_at.desc()).first()
-    )
-    prefill = None
-    if stage1_report:
-        games = stage1_report.result().get("games", [])
-        game = next((g for g in games if g["index"] == game_index), None)
-        if game:
-            prefill = sim_constructor.build_prefill(game)
-            game_title = game.get("title", game_title)
-    form_state = sim_constructor.build_form_state(prefill=prefill)
-    return render_template("constructor.html", document=document, game_index=game_index,
-                           game_title=game_title, state=form_state, blocks_meta=BLOCKS,
-                           presets=presets, saved=False, preset_key=None)
-
-
-@app.route("/documents/<int:doc_id>/constructor/<int:game_index>", methods=["POST"])
-@login_required
-def save_constructor(doc_id, game_index):
-    """Сохранение конфигурации конструктора (JSON из формы)."""
-    _owned_document(doc_id)
-
-    payload = request.get_json(silent=True) or {}
-    cfg = sim_constructor.validate(payload)
-
-    record = SimConfig.query.filter_by(document_id=doc_id, game_index=game_index).first()
-    if record is None:
-        record = SimConfig(document_id=doc_id, game_index=game_index)
-        db.session.add(record)
-    record.config_json = json.dumps(cfg, ensure_ascii=False)
-    db.session.commit()
-
-    return {"ok": True, "saved": cfg}
-
-
-@app.route("/documents/<int:doc_id>/simulate/<int:game_index>", methods=["POST"])
-@login_required
-def simulate(doc_id, game_index):
-    """Прогон симуляции по конфигу из формы. Возвращает метрики и находки."""
-    _owned_document(doc_id)
-
-    payload = request.get_json(silent=True) or {}
-    cfg = sim_constructor.validate(payload.get("config") or payload)
-    n_games = int(payload.get("n_games", sim_runner.DEFAULT_GAMES) or sim_runner.DEFAULT_GAMES)
-
-    result = sim_runner.run(cfg, n_games=n_games)
-
-    # сохраняем последний прогон как отчёт этапа 2
-    if result.get("runnable"):
-        report = Report(
-            document_id=doc_id, stage="2", status="done",
-            result_json=json.dumps({"game_index": game_index, "config": cfg, "result": result},
-                                   ensure_ascii=False),
-        )
-        db.session.add(report)
-        db.session.commit()
-
-    return {"ok": True, "result": result}
 
 
 if __name__ == "__main__":

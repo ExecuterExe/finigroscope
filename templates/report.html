@@ -29,14 +29,10 @@
 
         <div class="sim-banner {{ 'sim-ok' if game.can_simulate else 'sim-stop' }}">
             {% if game.can_simulate %}
-                ✅ Критичные для симуляции разделы на месте — можно переходить в конструктор.
+                ✅ Ключевые разделы заполнены.
             {% else %}
-                🛑 Нельзя симулировать: заполните критичные разделы ({{ game.criticals }}) — они нужны движку.
+                🛑 Не заполнены ключевые разделы ({{ game.criticals }}) — их нужно раскрыть.
             {% endif %}
-        </div>
-
-        <div class="constructor-cta">
-            <a class="btn {{ 'btn-primary' if game.can_simulate else 'btn-ghost' }} btn-sm" href="{{ url_for('constructor', doc_id=document.id, game_index=game.index) }}">⚙️ Конструктор и симуляция →</a>
         </div>
 
         <div class="section-list">
@@ -44,7 +40,7 @@
             <div class="section-row section-{{ s.status }}">
                 <span class="section-icon">{% if s.status == 'ok' %}✅{% elif s.status == 'warn' %}⚠️{% elif s.status == 'critical' %}🛑{% else %}❌{% endif %}</span>
                 <div class="section-body">
-                    <span class="section-name">{{ s.name }}{% if s.critical %} <span class="crit-tag">нужен для симуляции</span>{% endif %}</span>
+                    <span class="section-name">{{ s.name }}{% if s.critical %} <span class="crit-tag">ключевой раздел</span>{% endif %}</span>
                     {% if s.found %}
                         <span class="section-chars">{{ s.char_count }} симв.</span>
                         {% set issues = [] %}
@@ -53,6 +49,7 @@
                         {% if issues %}<span class="section-issues">{{ issues | join('; ') }}</span>{% endif %}
                     {% else %}
                         <span class="section-issues">раздел не найден{% if s.critical %} — обязателен{% endif %}</span>
+                        {% if s.suggestion %}<span class="section-suggest">в документе, возможно: «{{ s.suggestion }}»</span>{% endif %}
                     {% endif %}
                 </div>
             </div>

@@ -23,20 +23,20 @@
     {% else %}
     <div class="gs-grid">
         {% for g in seg.games %}
-        <article class="gs-card">
+        {% set level = 'full' if g.structure_pct >= 80 else ('mid' if g.structure_pct >= 40 else 'low') %}
+        <a class="gs-card gs-{{ level }}" href="{{ url_for('report', doc_id=document.id, game_index=g.index) }}">
             <div class="gs-card-head">
-                <span class="gs-num">Игра {{ g.index }}</span>
-                <span class="gs-chip {{ 'gs-chip-full' if g.structure_pct >= 80 else ('gs-chip-mid' if g.structure_pct >= 40 else 'gs-chip-low') }}">
-                    {{ g.found_count }}/{{ g.total }} разделов · {{ g.structure_pct }}%
-                </span>
+                <span class="gs-badge">{{ g.index }}</span>
+                <span class="gs-chip gs-chip-{{ level }}">{{ g.found_count }}/{{ g.total }} · {{ g.structure_pct }}%</span>
             </div>
-            {% if g.title_hint %}<h3 class="gs-title">{{ g.title_hint }}</h3>{% endif %}
+            <h3 class="gs-title">{{ g.title_hint or 'Игра ' ~ g.index }}</h3>
             <p class="gs-preview">{{ g.preview }}</p>
+            <div class="gs-bar"><span style="width: {{ g.structure_pct }}%"></span></div>
             <div class="gs-foot">
                 <span class="gs-meta">{{ g.paragraphs }} абзацев</span>
-                <a class="btn btn-primary btn-sm" href="{{ url_for('report', doc_id=document.id, game_index=g.index) }}">Анализировать эту игру →</a>
+                <span class="gs-cta">Анализировать →</span>
             </div>
-        </article>
+        </a>
         {% endfor %}
     </div>
     {% endif %}

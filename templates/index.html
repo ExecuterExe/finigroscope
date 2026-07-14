@@ -5,71 +5,32 @@
 {% block content %}
 <section class="hero">
     <div class="hero-inner">
-        <p class="hero-eyebrow">Трек «Фин-игры» · ИФТП</p>
         <h1 class="hero-title">ФинИгроСкоп</h1>
         <p class="hero-tagline">Анализ вашей игры под микроскопом</p>
-        <p class="hero-lead">
-            Загрузите описание финансовой настольной игры — и сервис проведёт его
-            через три этапа анализа: проверит структуру документа, отыщет
-            математические дыры в балансе и подскажет, как их закрыть.
-        </p>
 
         <div class="hero-actions">
             <a class="btn btn-primary btn-lg" href="{{ url_for('dashboard') }}">Открыть кабинет</a>
-        </div>
-
-        <div class="hero-audiences">
-            <div class="audience">
-                <span class="audience-icon">🎲</span>
-                <div>
-                    <b>Геймдизайнеру</b>
-                    <p>Найти недоработки до наставника и получить рекомендации по доработке.</p>
-                </div>
-            </div>
-            <div class="audience">
-                <span class="audience-icon">📊</span>
-                <div>
-                    <b>Наставнику</b>
-                    <p>Видеть прогресс работ своего участника и давать ему доступ к другим этапам</p>
-                </div>
-            </div>
         </div>
     </div>
 </section>
 
 <section class="stages">
-    <h2 class="section-title">Три этапа анализа</h2>
+    <h2 class="section-title">Три этапа</h2>
     <div class="stage-grid">
         <article class="stage-card">
             <div class="stage-num">01</div>
-            <div class="stage-icon">📄</div>
-            <h3>Документный анализ</h3>
-            <p>
-                Проверяем структуру и оформление по эталону
-            </p>
+            <h3>Документный этап</h3>
         </article>
 
         <article class="stage-card">
             <div class="stage-num">02</div>
-            <div class="stage-icon">🎯</div>
-            <h3>Симуляционный анализ</h3>
-            <p>
-                Прогоняем десятки тысяч партий по описанию
-            </p>
+            <h3>Симуляционный этап</h3>
         </article>
 
         <article class="stage-card">
             <div class="stage-num">03</div>
-            <div class="stage-icon">🧭</div>
-            <h3>Содержательный анализ</h3>
-            <p>
-               Проверяем игру через линзы Шелла
-            </p>
+            <h3>Содержательный этап</h3>
         </article>
     </div>
-
-    <p class="stages-frame">
-        Сервис оценивает в игре математический баланс, суть через описание в файле-документе
-    </p>
 </section>
 {% endblock %}

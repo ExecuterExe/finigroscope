@@ -7,22 +7,29 @@
     <h1>Личный кабинет</h1>
     <p class="dash-sub">Вы вошли как <b>{{ current_user.tg_tag }}</b>{% if current_user.is_admin %} · администратор{% endif %}.</p>
 
-    <div class="dash-card">
+    <div class="dash-card upload-card">
         <h2>Загрузить документ на анализ</h2>
-        <p class="dash-note">Этап 1: проверка структуры и оформления, извлечение параметров игры. Файл <code>.docx</code> (эссе или карточка идей).</p>
-        <form class="upload-form" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
-            <div class="doctype-row">
+        <p class="dash-note">Проверка структуры и оформления по эталону. Файл <code>.docx</code> — эссе или карточка идей.</p>
+        <form class="upload-form" id="upload-form" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+            <div class="doctype-cards">
                 {% for key, info in doc_types.items() %}
-                <label class="doctype-option">
+                <label class="doctype-card">
                     <input type="radio" name="doc_type" value="{{ key }}" {% if loop.first %}checked{% endif %}>
-                    <span>{{ info.title }}</span>
+                    <span class="dt-icon">{{ '📄' if key == 'essay' else '🗂️' }}</span>
+                    <span class="dt-title">{{ info.title }}</span>
+                    <span class="dt-check">✓</span>
                 </label>
                 {% endfor %}
             </div>
-            <div class="upload-row">
-                <input class="file-input" type="file" name="file" accept=".docx" required>
-                <button class="btn btn-primary" type="submit">Анализировать</button>
-            </div>
+
+            <label class="dropzone" id="dropzone">
+                <input type="file" name="file" id="file-input" accept=".docx" hidden required>
+                <span class="dz-icon">⬆</span>
+                <span class="dz-text">Перетащите <b>.docx</b> сюда<br>или <span class="dz-browse">выберите файл</span></span>
+                <span class="dz-filename" id="dz-filename" hidden></span>
+            </label>
+
+            <button class="btn btn-primary btn-lg btn-block" type="submit">Анализировать</button>
         </form>
     </div>
 
@@ -50,4 +57,45 @@
         {% endif %}
     </div>
 </section>
+
+<script>
+(function () {
+    var dz = document.getElementById("dropzone");
+    var input = document.getElementById("file-input");
+    var nameEl = document.getElementById("dz-filename");
+    if (!dz || !input) return;
+
+    function showName() {
+        if (input.files && input.files.length) {
+            nameEl.textContent = "📎 " + input.files[0].name;
+            nameEl.hidden = false;
+            dz.classList.add("dz-has-file");
+        } else {
+            nameEl.hidden = true;
+            dz.classList.remove("dz-has-file");
+        }
+    }
+    input.addEventListener("change", showName);
+
+    ["dragenter", "dragover"].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) {
+            e.preventDefault(); e.stopPropagation();
+            dz.classList.add("dz-over");
+        });
+    });
+    ["dragleave", "dragend", "drop"].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) {
+            e.preventDefault(); e.stopPropagation();
+            dz.classList.remove("dz-over");
+        });
+    });
+    dz.addEventListener("drop", function (e) {
+        var files = e.dataTransfer.files;
+        if (files && files.length) {
+            input.files = files;
+            showName();
+        }
+    });
+})();
+</script>
 {% endblock %}
