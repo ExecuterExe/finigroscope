@@ -393,6 +393,166 @@ a { color: var(--accent-soft); text-decoration: none; }
 }
 @media (max-width: 720px) { .params-grid { grid-template-columns: 1fr; } }
 
+/* ---------- mirror (стадия понимания игры) ---------- */
+.mirror-screen { max-width: 780px; margin: 0 auto; padding: clamp(28px, 5vw, 52px) clamp(20px, 5vw, 64px) 70px; }
+.mirror-head h1 { font-size: 2rem; font-weight: 800; margin: 10px 0 6px; }
+.mirror-sub { color: var(--text-dim); margin: 0 0 10px; font-size: 0.95rem; }
+.mirror-intro { color: var(--text-dim); font-size: 0.92rem; margin: 0; max-width: 640px; line-height: 1.55; }
+
+/* шаги процесса */
+.mirror-steps {
+    list-style: none; margin: 22px 0; padding: 0;
+    display: flex; gap: 8px; flex-wrap: wrap;
+}
+.mirror-steps .step {
+    flex: 1 1 auto; min-width: 150px; display: flex; align-items: center; gap: 9px;
+    padding: 11px 14px; border-radius: 12px; font-size: 0.9rem; font-weight: 600;
+    border: 1px solid var(--card-border); background: rgba(255,255,255,0.02); color: var(--text-dim);
+}
+.step-dot {
+    flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.82rem; font-weight: 800; background: rgba(255,255,255,0.08); color: var(--text-dim);
+}
+.step.step-current { border-color: var(--accent); background: rgba(77,159,255,0.10); color: var(--text); }
+.step.step-current .step-dot { background: var(--accent); color: #06121f; }
+.step.step-done { border-color: rgba(90,220,150,0.35); color: #9fe9c2; }
+.step.step-done .step-dot { background: #5adc96; color: #06121f; }
+
+.mirror-badge {
+    margin: 4px 0 18px; padding: 12px 16px; border-radius: 12px; font-weight: 600; font-size: 0.95rem;
+    border: 1px solid var(--card-border);
+}
+.badge-ready { background: rgba(90,220,150,0.10); border-color: rgba(90,220,150,0.35); color: #9fe9c2; }
+.badge-open { background: rgba(255,196,80,0.10); border-color: rgba(255,196,80,0.4); color: #ffd47a; }
+
+.mirror-error {
+    margin: 4px 0 18px; padding: 12px 16px; border-radius: 12px;
+    background: rgba(255,111,111,0.12); border: 1px solid rgba(255,111,111,0.4); color: #ff9a9a;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.mirror-loading {
+    margin: 4px 0 18px; padding: 16px 18px; border-radius: 12px; color: var(--text-dim);
+    background: var(--card); border: 1px solid var(--card-border);
+}
+
+/* карточка секции */
+.mcard {
+    margin: 0 0 16px; padding: 20px 22px; border-radius: 16px;
+    background: var(--card); border: 1px solid var(--card-border);
+}
+.mcard-accent { border-color: rgba(77,159,255,0.4); background: rgba(77,159,255,0.05); }
+.mcard-warn { border-color: rgba(255,196,80,0.4); background: rgba(255,196,80,0.05); }
+.mcard-title {
+    font-size: 1.05rem; font-weight: 700; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+}
+.mcard-count {
+    font-size: 0.78rem; font-weight: 800; padding: 1px 9px; border-radius: 999px;
+    background: var(--accent); color: #06121f;
+}
+.mcard-understanding { margin: 0; line-height: 1.65; font-size: 0.97rem; }
+
+/* карта понимания — узлы со статусом */
+.map-grid { display: flex; flex-direction: column; gap: 8px; }
+.map-node {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px;
+    padding: 11px 14px; border-radius: 11px;
+    border: 1px solid var(--card-border); background: rgba(255,255,255,0.02);
+}
+.map-node.st-ok { border-color: rgba(90,220,150,0.30); }
+.map-node.st-warn { border-color: rgba(255,196,80,0.35); background: rgba(255,196,80,0.05); }
+.map-node.st-miss { border-color: rgba(255,111,111,0.35); background: rgba(255,111,111,0.05); }
+.map-icon { font-size: 1.05rem; }
+.map-name { font-weight: 600; }
+.map-note { color: var(--text-dim); font-size: 0.86rem; margin-top: 2px; }
+.map-tag { font-size: 0.74rem; font-weight: 700; color: var(--text-dim); white-space: nowrap; }
+.st-ok .map-tag { color: #9fe9c2; }
+.st-warn .map-tag { color: #ffd47a; }
+.st-miss .map-tag { color: #ff9a9a; }
+
+/* вопросы автору */
+.qa-list { list-style: none; margin: 0; padding: 0; counter-reset: qa; display: flex; flex-direction: column; gap: 10px; }
+.qa-item {
+    counter-increment: qa; position: relative; padding: 12px 14px 12px 46px;
+    border-radius: 11px; border: 1px solid var(--card-border); background: rgba(0,0,0,0.14);
+}
+.qa-item::before {
+    content: counter(qa); position: absolute; left: 12px; top: 12px;
+    width: 24px; height: 24px; border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.82rem; font-weight: 800; background: var(--accent); color: #06121f;
+}
+.qa-question { font-weight: 600; line-height: 1.45; }
+.qa-badge { font-size: 0.68rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; margin-left: 6px; vertical-align: middle; }
+.qa-badge-comp { background: rgba(77,159,255,0.16); color: var(--accent-soft); border: 1px solid rgba(77,159,255,0.35); }
+.qa-badge-ctx { background: rgba(255,255,255,0.06); color: var(--text-dim); border: 1px solid var(--card-border); }
+.qa-why { color: var(--text-dim); font-size: 0.85rem; margin-top: 5px; }
+
+/* уточнения автора / открытые пробелы (проход 2) */
+.clar-list, .open-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.clar-item { padding: 11px 14px; border-radius: 11px; border: 1px solid var(--card-border); background: rgba(0,0,0,0.12); }
+.clar-q { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 4px; }
+.clar-a { font-weight: 500; line-height: 1.5; }
+.open-item { padding-left: 4px; }
+.open-reason { color: var(--text-dim); }
+
+/* сворачиваемый сырой ответ */
+.raw-toggle { margin: 0 0 16px; }
+.raw-toggle summary { cursor: pointer; color: var(--text-dim); font-size: 0.88rem; padding: 6px 0; }
+.raw-toggle summary:hover { color: var(--accent-soft); }
+.raw-body { margin-top: 12px; padding: 16px 18px; border-radius: 12px; background: var(--card); border: 1px solid var(--card-border); }
+
+/* .agent-bubble-text рендерит настоящий HTML из markdown-ответа агента
+   (см. фильтр `markdown` в app.py) — здесь его типографика (используется в
+   запасном виде и в сворачиваемом «полном ответе») */
+.agent-bubble-text { line-height: 1.65; font-size: 0.96rem; }
+.agent-bubble-text > *:first-child { margin-top: 0; }
+.agent-bubble-text > *:last-child { margin-bottom: 0; }
+.agent-bubble-text p { margin: 0 0 14px; }
+.agent-bubble-text strong { color: var(--text); font-weight: 700; }
+.agent-bubble-text h1, .agent-bubble-text h2, .agent-bubble-text h3 {
+    margin: 22px 0 10px; font-weight: 700; color: var(--accent-soft);
+}
+.agent-bubble-text h1 { font-size: 1.15rem; }
+.agent-bubble-text h2 { font-size: 1.08rem; }
+.agent-bubble-text h3 { font-size: 1rem; }
+.agent-bubble-text ul, .agent-bubble-text ol {
+    margin: 0 0 14px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px;
+}
+.agent-bubble-text li { line-height: 1.55; }
+.agent-bubble-text code {
+    background: rgba(255,255,255,0.08); padding: 1px 6px; border-radius: 5px;
+    font-size: 0.88em; font-family: "SFMono-Regular", Consolas, monospace;
+}
+.agent-bubble-text hr { border: none; border-top: 1px solid var(--card-border); margin: 18px 0; }
+.agent-bubble-text blockquote {
+    margin: 0 0 14px; padding: 4px 14px; border-left: 3px solid var(--accent);
+    color: var(--text-dim); background: rgba(255,255,255,0.03);
+}
+
+.agent-bubble-text table {
+    width: 100%; border-collapse: collapse; margin: 4px 0 16px; font-size: 0.9rem;
+    overflow-x: auto; display: block;
+}
+.agent-bubble-text th, .agent-bubble-text td {
+    padding: 9px 12px; border: 1px solid var(--card-border); text-align: left;
+}
+.agent-bubble-text th {
+    background: rgba(255,255,255,0.05); font-weight: 700; color: var(--text-dim);
+    white-space: nowrap;
+}
+.agent-bubble-text tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+.mirror-reply-form {
+    display: flex; flex-direction: column; gap: 14px; margin-top: 6px;
+    padding: 20px 22px; border-radius: 16px;
+    background: var(--card); border: 1px solid var(--card-border);
+}
+.mirror-textarea { resize: vertical; min-height: 130px; font-family: inherit; }
+.mirror-form-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.mirror-form-hint { color: var(--text-dim); font-size: 0.85rem; }
+
 /* ---------- constructor ---------- */
 .constructor { max-width: 1240px; margin: 0 auto; padding: clamp(28px, 4vw, 48px) clamp(18px, 4vw, 56px) 80px; }
 .constructor-head h1 { font-size: 1.9rem; font-weight: 800; margin: 10px 0 6px; }
@@ -511,7 +671,11 @@ a { color: var(--accent-soft); text-decoration: none; }
 .save-status { text-align: center; font-weight: 600; font-size: 0.9rem; color: var(--text-dim); min-height: 1.1em; }
 .save-ok { color: #9fe9c2; } .save-err { color: #ff9a9a; }
 
-.constructor-cta { margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.next-stage-cta {
+    margin-top: 16px; padding: 14px 16px; border-radius: 12px;
+    background: rgba(77,159,255,0.08); border: 1px solid rgba(77,159,255,0.3);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
 .cta-hint { color: var(--text-dim); font-size: 0.82rem; }
 
 /* результаты симуляции */

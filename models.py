@@ -97,3 +97,40 @@ class Report(db.Model):
     def result(self) -> dict:
         import json
         return json.loads(self.result_json)
+
+
+class MirrorSession(db.Model):
+    """Диалог агента «Зеркало понимания» для одной игры документа.
+
+    Протокол ровно двухпроходный (см. review/prompts/mirror.md): проход 1 без
+    ответа автора, проход 2 — с ответом. Одна сессия на (document_id,
+    game_index) — повторный визит на экран продолжает её, а не начинает заново.
+    """
+
+    __tablename__ = "mirror_sessions"
+
+    PHASE_PENDING = "pending"      # ещё не запускали проход 1
+    PHASE_MIRROR = "mirror"        # проход 1 сделан, ждём ответа автора
+    PHASE_CONFIRMED = "confirmed"  # проход 2 сделан
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
+    game_index = db.Column(db.Integer, nullable=False, default=1)
+    phase = db.Column(db.String(16), nullable=False, default=PHASE_PENDING)
+    last_text = db.Column(db.Text, nullable=True)       # человекочитаемый ответ агента
+    last_json = db.Column(db.Text, nullable=True)       # его машинный JSON-блок
+    author_answer = db.Column(db.Text, nullable=True)   # текст ответа автора
+    error = db.Column(db.Text, nullable=True)           # причина, если LLM недоступен
+    ready_to_proceed = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    document = db.relationship("Document", backref="mirror_sessions")
+
+    __table_args__ = (
+        db.UniqueConstraint("document_id", "game_index", name="uq_mirror_doc_game"),
+    )
+
+    def last_json_dict(self):
+        import json
+        return json.loads(self.last_json) if self.last_json else None

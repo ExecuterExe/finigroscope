@@ -14,6 +14,7 @@ import os
 import uuid
 from functools import wraps
 
+from dotenv import load_dotenv
 from flask import (
     Flask,
     abort,
@@ -28,7 +29,12 @@ from werkzeug.utils import secure_filename
 
 from analysis import stage1
 from analysis.reference import DOC_TYPES
-from models import Document, Report, User, db
+from models import Document, MirrorSession, Report, User, db
+from review import mirror as mirror_agent
+
+# Секреты (LLM_PROVIDER, GEMINI_API_KEY, ...) читаются из .env в корне проекта —
+# см. .env.example. Файл .env в git не попадает (см. .gitignore).
+load_dotenv()
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 
@@ -66,7 +72,13 @@ def _reset_storage():
 
 with app.app_context():
     if AUTH_DISABLED:
-        _reset_storage()   # чистый старт при каждом запуске сервера
+        # Только на ДЕЙСТВИТЕЛЬНО новый запуск процесса `python app.py`, а не на
+        # каждую авто-перезагрузку Flask (debug=True перезапускает воркер при
+        # любом сохранении .py-файла — без этой проверки правки кода на лету
+        # стирали бы всю сессию пользователя, и старые открытые вкладки/ссылки
+        # начинали бы отдавать 404 посреди работы).
+        if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+            _reset_storage()
     else:
         db.create_all()
 
@@ -117,6 +129,51 @@ def login_required(view):
 def inject_user():
     """Делает current_user доступным во всех шаблонах."""
     return {"current_user": current_user(), "auth_disabled": AUTH_DISABLED}
+
+
+def _ensure_blank_line_around_tables(text: str) -> str:
+    """Вставляет пустую строку до/после markdown-таблиц.
+
+    Модели обычно не оставляют пустую строку между заголовком и таблицей
+    (просто перенос строки) — а без неё расширение tables в Python-Markdown
+    не признаёт таблицу отдельным блоком, особенно вместе с nl2br (который
+    иначе превращает всю таблицу в цепочку <br> вместо <table>).
+    """
+    import re
+
+    table_line = re.compile(r"^\s*\|.*\|\s*$")
+    lines = text.split("\n")
+    out = []
+    prev_is_table = False
+    for line in lines:
+        is_table = bool(table_line.match(line))
+        if is_table and not prev_is_table and out and out[-1].strip() != "":
+            out.append("")
+        if not is_table and prev_is_table and line.strip() != "":
+            out.append("")
+        out.append(line)
+        prev_is_table = is_table
+    return "\n".join(out)
+
+
+@app.template_filter("markdown")
+def render_markdown(text):
+    """Рендерит markdown из ответа ИИ-агента в HTML (таблицы, списки, **жирный**).
+
+    Текст — внешний ввод (ответ LLM, а через него косвенно и содержимое
+    документа автора), поэтому сперва экранируем HTML-спецсимволы и только
+    потом прогоняем через markdown — так `<script>`, случайно оказавшийся в
+    тексте, останется безопасным текстом, а не выполнится как разметка;
+    сама markdown-разметка (**, |, #, -) экранирования не боится.
+    """
+    import html as _html
+    import markdown as _markdown
+
+    if not text:
+        return ""
+    escaped = _html.escape(text)
+    escaped = _ensure_blank_line_around_tables(escaped)
+    return _markdown.markdown(escaped, extensions=["extra", "nl2br", "sane_lists"])
 
 
 # --- публичные маршруты -----------------------------------------------------
@@ -259,16 +316,109 @@ def report(doc_id, game_index):
     return render_template("report.html", document=document, report=single)
 
 
+@app.route("/documents/<int:doc_id>/mirror/<int:game_index>")
+@login_required
+def mirror(doc_id, game_index):
+    """Экран диалога с агентом «Зеркало понимания» — шаг между этапами 1 и 2.
+
+    Доступен только если у выбранной игры нет критичных пробелов (can_simulate).
+    На первый визит сессия создаётся и сразу запускается проход 1; повторные
+    визиты просто показывают текущее состояние диалога.
+    """
+    document = _owned_document(doc_id)
+
+    result = stage1.analyze(document.stored_path, document.doc_type, use_semantics=False)
+    game = next((g for g in result.get("games", []) if g["index"] == game_index), None)
+    if game is None:
+        flash("Игра не найдена в документе.", "error")
+        return redirect(url_for("games", doc_id=doc_id))
+    if not game.get("can_simulate"):
+        flash("Сначала заполните ключевые разделы — без них диалог с агентом недоступен.", "warning")
+        return redirect(url_for("report", doc_id=doc_id, game_index=game_index))
+
+    ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if ms is None:
+        ms = MirrorSession(document_id=doc_id, game_index=game_index)
+        db.session.add(ms)
+        db.session.commit()
+
+    if ms.phase == MirrorSession.PHASE_PENDING:
+        game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
+        outcome = mirror_agent.run_pass(game_text)
+        _apply_mirror_outcome(ms, outcome, phase_on_success=MirrorSession.PHASE_MIRROR)
+        db.session.commit()
+
+    return render_template("mirror.html", document=document, game=game,
+                           game_index=game_index, ms=ms)
+
+
+@app.route("/documents/<int:doc_id>/mirror/<int:game_index>/reply", methods=["POST"])
+@login_required
+def mirror_reply(doc_id, game_index):
+    """Отправка ответа автора агенту → проход 2 («Сверка и финал»)."""
+    document = _owned_document(doc_id)
+
+    ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if ms is None or ms.phase != MirrorSession.PHASE_MIRROR:
+        flash("Сначала дождитесь первого ответа агента.", "error")
+        return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
+
+    answer = (request.form.get("answer") or "").strip()
+    if not answer:
+        flash("Введите ответ (или напишите «всё ясно, продолжаем»).", "error")
+        return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
+
+    ms.author_answer = answer
+    game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
+    outcome = mirror_agent.run_pass(game_text, prior_json=ms.last_json_dict(), author_answer=answer)
+    _apply_mirror_outcome(ms, outcome, phase_on_success=MirrorSession.PHASE_CONFIRMED)
+    db.session.commit()
+
+    return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
+
+
+def _apply_mirror_outcome(ms, outcome, phase_on_success):
+    """Записывает результат вызова агента в сессию: успех продвигает фазу, ошибка — нет.
+
+    На ошибке фаза не меняется, поэтому повторный GET на /mirror сам повторит
+    попытку (для pending) или пользователь может просто отправить ответ ещё раз
+    (для mirror) — без отдельной кнопки «retry».
+    """
+    if not outcome.get("available"):
+        ms.error = outcome.get("error") or "ИИ-агент недоступен."
+        return
+    ms.error = None
+    ms.last_text = outcome.get("text")
+    ms.last_json = json.dumps(outcome.get("json"), ensure_ascii=False) if outcome.get("json") else None
+    ms.ready_to_proceed = bool((outcome.get("json") or {}).get("ready_to_proceed"))
+    ms.phase = phase_on_success
+
+
 def _owned_document(doc_id):
-    """Возвращает документ, если он принадлежит текущему пользователю/админу, иначе abort."""
+    """Возвращает документ, если он принадлежит текущему пользователю/админу.
+
+    Если документ не найден — не голый 404, а понятное сообщение и редирект в
+    кабинет: чаще всего это просто устаревшая ссылка (хранилище эфемерное и
+    чистится при перезапуске сервера, см. AUTH_DISABLED), а не настоящая ошибка.
+    """
     user = current_user()
     document = db.session.get(Document, doc_id)
     if document is None:
-        abort(404)
+        flash("Документ не найден — возможно, ссылка устарела (сервер перезапускался). "
+              "Загрузите файл заново.", "warning")
+        abort(redirect(url_for("dashboard")))
     if document.user_id != user.id and not user.is_admin:
         abort(403)
     return document
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # use_reloader=False — намеренно. Автоперезагрузчик Werkzeug следит не
+    # только за файлами проекта, а за файлами ВСЕХ импортированных модулей,
+    # включая сторонние библиотеки в site-packages: любое изменение там (даже
+    # `pip install` чего-то не связанного) перезапускает воркер. Для обычных
+    # маршрутов это неприятно (см. AUTH_DISABLED — сбрасывало сессию), а для
+    # /mirror — ОПАСНО: запрос к ИИ-агенту синхронный и может идти до минуты,
+    # и перезапуск посреди него молча обрывает соединение (наблюдалось на
+    # практике). После правки .py-файлов сервер нужно перезапускать вручную.
+    app.run(debug=True, use_reloader=False)

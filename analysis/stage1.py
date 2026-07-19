@@ -72,6 +72,34 @@ def segment(source, doc_type: str) -> dict:
     }
 
 
+def game_text_for_agent(source, doc_type: str, game_index: int) -> str:
+    """Текст выбранной игры по разделам эталона — вход для ИИ-агентов (этап 2+).
+
+    Не анализ и не оценка — просто сериализация того, что документный этап уже
+    прочитал из .docx (заголовок раздела + его содержимое), в текст для промпта.
+    Не найденные/пустые разделы помечаются явно, чтобы агент не путал «раздела
+    нет в документе» с «раздел есть, но пуст» — хотя для промпта разница не
+    критична, а вот для доверия к ответу агента — важна.
+    """
+    if doc_type not in DOC_TYPES:
+        raise ValueError(f"Неизвестный тип документа: {doc_type!r}")
+    structure = DOC_TYPES[doc_type]["structure"]
+
+    games_raw, _ = structure_check.analyze_structure(source, structure, doc_type)
+    if not (1 <= game_index <= len(games_raw)):
+        raise ValueError(f"Игра {game_index} не найдена в документе")
+    raw = games_raw[game_index - 1]["_raw"]
+
+    lines = []
+    for idx, name in enumerate(structure):
+        data = raw.get(idx)
+        lines.append(f"### {name}")
+        content = data["content"].strip() if data else ""
+        lines.append(content if content else "(раздел не найден или пуст в документе)")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 def analyze(source, doc_type: str, use_semantics: bool = False) -> dict:
     """Документный анализ по ЗАДАННОЙ структуре разделов.
 

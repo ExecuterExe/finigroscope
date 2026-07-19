@@ -45,6 +45,11 @@ def load_balance_prompt() -> str:
     return _read(os.path.join(_PROMPTS_DIR, "balance_eval.md"))
 
 
+def load_mirror_prompt() -> str:
+    """Системный промпт агента «Зеркало понимания» (шаг между этапами 1 и 2)."""
+    return _read(os.path.join(_PROMPTS_DIR, "mirror.md"))
+
+
 # --- сборка фактов этапов 1-2 в текст --------------------------------------
 def _format_stage1(stage1: dict) -> str:
     if not stage1:

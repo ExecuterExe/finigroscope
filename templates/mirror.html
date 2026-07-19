@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}Стадия понимания игры — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set data = ms.last_json_dict() %}
+{% set status_meta = {
+    'ok':      ('✅', 'st-ok',   'ясно'),
+    'unclear': ('⚠️', 'st-warn', 'неоднозначно'),
+    'missing': ('❌', 'st-miss', 'нет в тексте')
+} %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('report', doc_id=document.id, game_index=game_index) }}">← к отчёту</a>
+        <h1>Стадия понимания игры</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · {{ game.title }}</p>
+        <p class="mirror-intro">Агент читает вашу игру и сверяется с вами, что понял её верно, — до того как её начнут симулировать и оценивать. Баллов и оценок здесь нет: только понимание и уточнения.</p>
+    </div>
+
+    {# --- шаги процесса --- #}
+    {% set s1 = 'done' if ms.phase != 'pending' else 'current' %}
+    {% set s2 = 'done' if ms.phase == 'confirmed' else ('current' if ms.phase == 'mirror' else 'todo') %}
+    {% set s3 = ('done' if ms.ready_to_proceed else 'current') if ms.phase == 'confirmed' else 'todo' %}
+    <ol class="mirror-steps">
+        <li class="step step-{{ s1 }}"><span class="step-dot">1</span> Агент понял игру</li>
+        <li class="step step-{{ s2 }}"><span class="step-dot">2</span> Ваши уточнения</li>
+        <li class="step step-{{ s3 }}"><span class="step-dot">3</span> Готово к следующему этапу</li>
+    </ol>
+
+    {% if ms.phase == 'confirmed' %}
+    <div class="mirror-badge {{ 'badge-ready' if ms.ready_to_proceed else 'badge-open' }}">
+        {% if ms.ready_to_proceed %}✅ Понимание подтверждено — можно двигаться дальше.
+        {% else %}⚠️ Понимание подтверждено частично — остались непокрытые пробелы (см. ниже).{% endif %}
+    </div>
+    {% endif %}
+
+    {% if ms.error %}
+    <div class="mirror-error">
+        <span>🛑 {{ ms.error }}</span>
+        {% if ms.phase == 'pending' %}
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('mirror', doc_id=document.id, game_index=game_index) }}">Попробовать снова</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if ms.phase == 'pending' and not ms.error %}
+    <div class="mirror-loading">Агент читает игру…</div>
+    {% endif %}
+
+    {% if data %}
+        {# ===== структурированный вид (из JSON агента) ===== #}
+
+        {% if data['understanding'] %}
+        <div class="mcard">
+            <div class="mcard-title">🧩 Как агент понял игру</div>
+            <p class="mcard-understanding">{{ data['understanding'] }}</p>
+        </div>
+        {% endif %}
+
+        {% if data['map'] %}
+        <div class="mcard">
+            <div class="mcard-title">🗺️ Карта понимания</div>
+            <div class="map-grid">
+                {% for node in data['map'] %}
+                {% set sm = status_meta.get(node['status'], ('•', 'st-warn', node['status'])) %}
+                <div class="map-node {{ sm[1] }}">
+                    <span class="map-icon">{{ sm[0] }}</span>
+                    <div class="map-body">
+                        <div class="map-name">{{ node['node'] }}</div>
+                        {% if node['note'] %}<div class="map-note">{{ node['note'] }}</div>{% endif %}
+                    </div>
+                    <span class="map-tag">{{ sm[2] }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if data['questions'] %}
+        <div class="mcard mcard-accent">
+            <div class="mcard-title">❓ Что нужно уточнить <span class="mcard-count">{{ data['questions'] | length }}</span></div>
+            <ol class="qa-list">
+                {% for q in data['questions'] %}
+                <li class="qa-item">
+                    <div class="qa-question">
+                        {{ q['question'] }}
+                        {% if q['type'] == 'components' %}<span class="qa-badge qa-badge-comp">компоненты</span>
+                        {% elif q['type'] == 'context' %}<span class="qa-badge qa-badge-ctx">контекст</span>{% endif %}
+                    </div>
+                    {% if q['why'] %}<div class="qa-why">Зачем: {{ q['why'] }}</div>{% endif %}
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+
+        {% if data['author_clarifications'] %}
+        <div class="mcard">
+            <div class="mcard-title">💬 Ваши уточнения учтены</div>
+            <ul class="clar-list">
+                {% for c in data['author_clarifications'] %}
+                <li class="clar-item">
+                    {% if c['question'] %}<div class="clar-q">{{ c['question'] }}</div>{% endif %}
+                    <div class="clar-a">{{ c['answer'] }}</div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if data['still_open'] %}
+        <div class="mcard mcard-warn">
+            <div class="mcard-title">⚠️ Остались непокрытыми</div>
+            <ul class="open-list">
+                {% for o in data['still_open'] %}
+                <li class="open-item"><b>{{ o['item'] }}</b>{% if o['reason'] %} — <span class="open-reason">{{ o['reason'] }}</span>{% endif %}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if ms.last_text %}
+        <details class="raw-toggle">
+            <summary>Показать полный текст ответа агента</summary>
+            <div class="agent-bubble-text raw-body">{{ ms.last_text | markdown | safe }}</div>
+        </details>
+        {% endif %}
+
+    {% elif ms.last_text %}
+        {# ===== запасной вид: JSON не распознан, показываем markdown ===== #}
+        <div class="mcard">
+            <div class="mcard-title">🤖 Ответ агента</div>
+            <div class="agent-bubble-text">{{ ms.last_text | markdown | safe }}</div>
+        </div>
+    {% endif %}
+
+    {% if ms.phase == 'mirror' %}
+    <form class="mirror-reply-form" id="reply-form" method="post" action="{{ url_for('mirror_reply', doc_id=document.id, game_index=game_index) }}">
+        <label class="field">
+            <span class="field-label">Ваш ответ агенту</span>
+            <textarea class="field-input mirror-textarea" name="answer" rows="7" placeholder="Ответьте на вопросы выше (можно по номерам). Если считаете, что всё уже ясно — так и напишите." required>{{ ms.author_answer or '' }}</textarea>
+        </label>
+        <div class="mirror-form-actions">
+            <button class="btn btn-primary" type="submit" id="reply-submit">Отправить ответ агенту</button>
+            <span class="mirror-form-hint">Агент сверит ваши уточнения и подтвердит понимание.</span>
+        </div>
+    </form>
+    {% endif %}
+</section>
+
+<script>
+// Проход агента сервер обрабатывает синхронно и может занимать до минуты —
+// без этой подсказки страница в этот момент выглядит зависшей.
+(function () {
+    var form = document.getElementById("reply-form");
+    if (!form) return;
+    form.addEventListener("submit", function () {
+        var btn = document.getElementById("reply-submit");
+        btn.disabled = true;
+        btn.textContent = "Агент отвечает… (обычно до минуты)";
+    });
+})();
+</script>
+{% endblock %}

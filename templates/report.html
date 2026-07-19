@@ -35,6 +35,13 @@
             {% endif %}
         </div>
 
+        {% if game.can_simulate %}
+        <div class="next-stage-cta">
+            <a class="btn btn-primary btn-sm mirror-link" href="{{ url_for('mirror', doc_id=document.id, game_index=game.index) }}">Далее: стадия понимания игры →</a>
+            <span class="cta-hint">агент сверится с вами, что верно понял игру</span>
+        </div>
+        {% endif %}
+
         <div class="section-list">
             {% for s in game.sections %}
             <div class="section-row section-{{ s.status }}">
@@ -90,4 +97,17 @@
         проверяемые проблемы. Финальное суждение о качестве игры остаётся за человеком.
     </p>
 </section>
+
+<script>
+// Первый проход агента сервер обрабатывает синхронно и может занимать до
+// минуты — без этой подсказки клик по кнопке выглядит так, будто ничего
+// не произошло (браузер просто ждёт ответ сервера молча).
+document.querySelectorAll(".mirror-link").forEach(function (el) {
+    el.addEventListener("click", function () {
+        el.textContent = "Открываем стадию понимания игры… (обычно до минуты)";
+        el.style.pointerEvents = "none";
+        el.style.opacity = "0.7";
+    });
+});
+</script>
 {% endblock %}
