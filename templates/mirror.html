@@ -3,10 +3,15 @@
 
 {% block content %}
 {% set data = ms.last_json_dict() %}
+{# Четыре статуса (v3 промпта). Различие missing / absent принципиально:
+   «не описано, хотя механика есть» — это пробел, который повиснет непроверенным,
+   а «механики в игре нет» — установленный факт, и тесты по нему честно уйдут
+   в n/a. В отчёте оба выглядели бы как «тест не выполнен», означая обратное. #}
 {% set status_meta = {
     'ok':      ('✅', 'st-ok',   'ясно'),
     'unclear': ('⚠️', 'st-warn', 'неоднозначно'),
-    'missing': ('❌', 'st-miss', 'нет в тексте')
+    'missing': ('❌', 'st-miss', 'нет в тексте'),
+    'absent':  ('➖', 'st-absent', 'механики нет')
 } %}
 
 <section class="mirror-screen">
@@ -31,6 +36,16 @@
     <div class="mirror-badge {{ 'badge-ready' if ms.ready_to_proceed else 'badge-open' }}">
         {% if ms.ready_to_proceed %}✅ Понимание подтверждено — можно двигаться дальше.
         {% else %}⚠️ Понимание подтверждено частично — остались непокрытые пробелы (см. ниже).{% endif %}
+    </div>
+    <div class="next-stage-cta">
+        <a class="btn btn-primary btn-sm spec-link" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">Далее: извлечение структуры игры →</a>
+        <span class="cta-hint">агент разложит согласованный текст в game_spec.json</span>
+    </div>
+    {% elif ms.phase == 'mirror' %}
+    <div class="round-note">
+        Раунд уточнений <b>{{ ms.round }}</b> из {{ ms.MAX_ROUNDS }}.
+        {% if ms.is_final_round %}Это последний раунд — после вашего ответа сверка завершится, а всё нераскрытое зафиксируется как непокрытые пробелы.
+        {% else %}Если после ответа что-то останется неясным, агент может переспросить — но не более {{ ms.MAX_ROUNDS }} раундов.{% endif %}
     </div>
     {% endif %}
 
@@ -58,10 +73,15 @@
         {% endif %}
 
         {% if data['map'] %}
+        {# Узлы «механики нет» (absent) сворачиваем в одну строку: их может быть
+           много, и вперемешку с реальными пробелами они забивают карту шумом —
+           промпт v3 требует того же и в тексте для автора. #}
+        {% set applicable = data['map'] | rejectattr('status', 'equalto', 'absent') | list %}
+        {% set not_applicable = data['map'] | selectattr('status', 'equalto', 'absent') | list %}
         <div class="mcard">
-            <div class="mcard-title">🗺️ Карта понимания</div>
+            <div class="mcard-title">🗺️ Карта понимания <span class="mcard-count">{{ applicable | length }}</span></div>
             <div class="map-grid">
-                {% for node in data['map'] %}
+                {% for node in applicable %}
                 {% set sm = status_meta.get(node['status'], ('•', 'st-warn', node['status'])) %}
                 <div class="map-node {{ sm[1] }}">
                     <span class="map-icon">{{ sm[0] }}</span>
@@ -73,6 +93,17 @@
                 </div>
                 {% endfor %}
             </div>
+
+            {% if not_applicable %}
+            <div class="map-absent">
+                <span class="map-icon">➖</span>
+                <span>Этих механик в игре нет, проверять нечего:
+                    {# пробел между чипами намеренно: без него названия склеиваются
+                       при копировании текста и в озвучке скринридером #}
+                    {% for node in not_applicable %}<span class="chip-mini">{{ node['node'] }}</span> {% endfor %}
+                </span>
+            </div>
+            {% endif %}
         </div>
         {% endif %}
 
@@ -85,6 +116,7 @@
                     <div class="qa-question">
                         {{ q['question'] }}
                         {% if q['type'] == 'components' %}<span class="qa-badge qa-badge-comp">компоненты</span>
+                        {% elif q['type'] == 'diagnostic' %}<span class="qa-badge qa-badge-ctx">диагностика</span>
                         {% elif q['type'] == 'context' %}<span class="qa-badge qa-badge-ctx">контекст</span>{% endif %}
                     </div>
                     {% if q['why'] %}<div class="qa-why">Зачем: {{ q['why'] }}</div>{% endif %}
@@ -110,12 +142,20 @@
 
         {% if data['still_open'] %}
         <div class="mcard mcard-warn">
-            <div class="mcard-title">⚠️ Остались непокрытыми</div>
+            <div class="mcard-title">⚠️ Остались непокрытыми <span class="mcard-count">{{ data['still_open'] | length }}</span></div>
             <ul class="open-list">
                 {% for o in data['still_open'] %}
-                <li class="open-item"><b>{{ o['item'] }}</b>{% if o['reason'] %} — <span class="open-reason">{{ o['reason'] }}</span>{% endif %}</li>
+                <li class="open-item">
+                    <b>{{ o['item'] or o.get('field') }}</b>
+                    {% if o['reason'] %} — <span class="open-reason">{{ o['reason'] }}</span>{% endif %}
+                    {# critical (v3) — по нему второй гейт решает, что поднимать заново #}
+                    {% if o.get('critical') %}<span class="qa-badge gap-badge">критично</span>{% endif %}
+                </li>
                 {% endfor %}
             </ul>
+            {% if data['still_open'] | selectattr('critical') | list %}
+            <p class="desc-hint">Критичные пробелы поднимет второй гейт — после того как агент разложит игру в структуру.</p>
+            {% endif %}
         </div>
         {% endif %}
 

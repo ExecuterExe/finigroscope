@@ -16,6 +16,10 @@
         </a>
         <nav class="site-nav">
             <a class="btn btn-ghost" href="{{ url_for('dashboard') }}">Кабинет</a>
+            <a class="btn btn-ghost nav-llm" href="{{ url_for('llm_settings_page') }}"
+               title="Какой ИИ используется сервисом">
+                🧠 {{ llm_active_title }}
+            </a>
             {% if not auth_disabled %}
                 {% if current_user %}<a class="btn btn-ghost" href="{{ url_for('logout') }}">Выйти</a>
                 {% else %}<a class="btn btn-light" href="{{ url_for('login') }}">Войти</a>{% endif %}

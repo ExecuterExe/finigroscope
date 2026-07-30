@@ -1,0 +1,381 @@
+{% extends "base.html" %}
+{% block title %}Структура игры — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set root = gs.spec_dict() or {} %}
+{% set spec = root.get('game_spec') or {} %}
+{% set core = spec.get('core') or {} %}
+{% set gtext = spec.get('text') or {} %}
+{% set gaps = root.get('gaps') or [] %}
+{% set ambig = root.get('ambiguities') or [] %}
+{% set critical = gaps | selectattr('critical') | list %}
+{% set meta = root.get('diagnostic_meta') or {} %}
+{% set issues = gs.issues() %}
+{% set resolution = meta.get('actions_resolution') or {} %}
+{% set resolution_ru = {
+    'deterministic': ('по правилу', 'res-det'),
+    'probabilistic': ('случайностью', 'res-prob'),
+    'subjective_judgment': ('суждением игроков', 'res-subj')
+} %}
+{% set role_ru = {
+    'win_metric': 'копится ради победы',
+    'spendable': 'тратится на действия',
+    'both': 'и копится, и тратится'
+} %}
+
+{% macro val(v) -%}
+    {%- if v is none or v == '' or v == [] -%}<span class="v-null">не указано</span>
+    {%- elif v is sameas true -%}да
+    {%- elif v is sameas false -%}нет
+    {%- elif v is string or v is number -%}{{ v }}
+    {%- elif v is mapping -%}{{ v.values() | select('defined') | map('string') | join(' · ') }}
+    {%- else -%}{{ v | join(', ') }}
+    {%- endif -%}
+{%- endmacro %}
+
+<section class="spec-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('mirror', doc_id=document.id, game_index=game_index) }}">← к стадии понимания</a>
+        <h1>Структура игры</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Агент-извлеченец разложил согласованный текст в <code>game_spec</code>. Он ничего не додумывает: чего не было в тексте и уточнениях — осталось пустым и попало в пробелы.</p>
+    </div>
+
+    {% if gs.error %}
+    <div class="mirror-error">
+        <span>🛑 {{ gs.error }}</span>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">Попробовать снова</a>
+    </div>
+    {% endif %}
+
+    {% if root %}
+        {% if gs.status == 'accepted' %}
+        <div class="mirror-badge badge-ready">✅ Вы приняли эту структуру — игра идёт дальше по конвейеру.</div>
+        {% else %}
+        <div class="mirror-badge {{ 'badge-open' if critical else 'badge-ready' }}">
+            {% if critical %}⚠️ Структура извлечена, но {{ critical | length }} критичн{{ 'ый пробел' if critical|length == 1 else 'ых пробела(ов)' }} —
+                {% if ms.gate2_status == 'done' %}их поднимал второй гейт, оставшееся зафиксировано честно.
+                {% else %}их можно закрыть во втором гейте (ниже).{% endif %}
+            {% else %}✅ Структура извлечена, критичных пробелов нет.{% endif %}
+        </div>
+        {% endif %}
+
+        {# --- текстовое описание: как сервис теперь понимает игру --- #}
+        <div class="mcard mcard-accent">
+            <div class="mcard-title">📝 Так сервис понимает вашу игру</div>
+            <p class="mcard-understanding spec-lead">{{ describe.summary_line(root) }}</p>
+            {% for block in describe.describe(root) %}
+            <div class="desc-block">
+                <div class="desc-title">{{ block.title }}</div>
+                <ul class="desc-list">
+                    {% for line in block.lines %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+            </div>
+            {% endfor %}
+            <p class="desc-hint">Если что-то здесь описано неверно — скажите об этом ниже, у вас есть одна правка.</p>
+        </div>
+
+        {# --- второй гейт: критичные пробелы, найденные при структурировании --- #}
+        {% if gate2_gaps and gs.status != 'accepted' %}
+            {# Порядок ветвей важен: после обращения А бюджет гейта уже потрачен
+               (can_gate2 = false), но вопросы ждут ответа — без этой ветви автор
+               остался бы без ссылки на открытый гейт. #}
+            {% if ms.gate2_status == 'asked' %}
+            <div class="mcard mcard-accent">
+                <div class="mcard-title">🚪 Второй гейт открыт — агент ждёт ответа</div>
+                <p class="dash-note">Агент задал точечные вопросы по критичным пробелам структуры. Ответите — структура пересоберётся с закрытыми пробелами.</p>
+                <div class="accept-actions">
+                    <a class="btn btn-primary" href="{{ url_for('gate2', doc_id=document.id, game_index=game_index) }}">Перейти к вопросам гейта →</a>
+                    <span class="cta-hint">можно и не отвечать — тогда пробелы останутся зафиксированными</span>
+                </div>
+            </div>
+            {% elif ms.can_gate2 %}
+            <div class="mcard mcard-warn">
+                <div class="mcard-title">🚪 Второй гейт: можно закрыть {{ gate2_gaps | length }} критичн{{ 'ый пробел' if gate2_gaps|length == 1 else 'ых пробела(ов)' }}</div>
+                <p class="dash-note">Эти пробелы вскрылись только при раскладывании игры в структуру — на уровне текста их было не видно. Спросить о них может <b>только агент понимания</b>: остальным шагам конвейера домысливать запрещено. Это короткий добор на несколько вопросов, а не повторная сверка.</p>
+                <div class="accept-actions">
+                    <a class="btn btn-primary" href="{{ url_for('gate2', doc_id=document.id, game_index=game_index) }}">Открыть второй гейт →</a>
+                    <span class="cta-hint">гейт открывается один раз; можно и пропустить — пробелы останутся зафиксированными</span>
+                </div>
+            </div>
+            {% elif ms.gate2_status == 'done' %}
+            <div class="mcard">
+                <div class="mcard-title">🚪 Второй гейт пройден</div>
+                <p class="dash-note">Оставшиеся пробелы зафиксированы честно — конвейер пойдёт дальше с пометкой, что часть проверок не выполнена.
+                    <a href="{{ url_for('gate2', doc_id=document.id, game_index=game_index) }}">Посмотреть итог гейта</a>.</p>
+            </div>
+            {% endif %}
+        {% endif %}
+
+        {# --- приёмка структуры автором --- #}
+        {% if gs.status != 'accepted' %}
+        <div class="mcard accept-card">
+            <div class="mcard-title">🤝 Принимаете это описание игры?</div>
+            {% if gs.can_revise %}
+            <p class="dash-note">Если всё верно — примите структуру, и игра пойдёт дальше. Если агент понял что-то не так — опишите, что именно, и он пересоберёт структуру. <b>Правка доступна один раз.</b></p>
+            {% else %}
+            <p class="dash-note">Правка уже использована. Можно только принять структуру — оставшиеся неточности разберут следующие шаги конвейера.</p>
+            {% endif %}
+
+            <div class="accept-actions">
+                <form method="post" action="{{ url_for('spec_accept', doc_id=document.id, game_index=game_index) }}">
+                    <button class="btn btn-primary" type="submit">Да, принимаю описание</button>
+                </form>
+                {% if gs.can_revise %}
+                <button class="btn btn-ghost" type="button" id="revise-toggle">Нет, нужно поправить</button>
+                {% endif %}
+            </div>
+
+            {% if gs.can_revise %}
+            <form class="revise-form" id="revise-form" method="post" hidden
+                  action="{{ url_for('spec_revise', doc_id=document.id, game_index=game_index) }}">
+                <label class="field">
+                    <span class="field-label">Что понято неверно?</span>
+                    <textarea class="field-input mirror-textarea" name="note" rows="6"
+                              placeholder="Опишите, что агент понял не так и как на самом деле. Например: «побеждает не тот, у кого больше очков, а тот, кто первым собрал 5 карт»." required></textarea>
+                </label>
+                <div class="mirror-form-actions">
+                    <button class="btn btn-primary" type="submit" id="revise-submit">Отправить правку</button>
+                    <span class="mirror-form-hint">Замечание уйдёт агенту понимания, структура пересоберётся.</span>
+                </div>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if gs.revision_note %}
+        <div class="mcard">
+            <div class="mcard-title">✍️ Ваша правка учтена</div>
+            <div class="clar-item"><div class="clar-a">{{ gs.revision_note }}</div></div>
+        </div>
+        {% endif %}
+
+        <div class="mcard">
+            <div class="mcard-title">⚙️ Ядро (core) — то, что нужно симуляции</div>
+            <div class="spec-grid">
+                <div class="spec-item"><span class="spec-k">Игроки</span><span class="spec-v">
+                    {% set p = core.get('players') or {} %}
+                    {% if p.get('min') or p.get('max') %}{{ p.get('min') }}–{{ p.get('max') }}{% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+                <div class="spec-item"><span class="spec-k">Режим</span><span class="spec-v">{{ val(core.get('mode')) }}</span></div>
+                <div class="spec-item"><span class="spec-k">Выбывание</span><span class="spec-v">{{ val(core.get('elimination')) }}</span></div>
+                <div class="spec-item"><span class="spec-k">Порядок хода</span><span class="spec-v">{{ val((core.get('turn') or {}).get('order')) }}</span></div>
+                <div class="spec-item"><span class="spec-k">Действия хода</span><span class="spec-v">{{ val((core.get('turn') or {}).get('actions')) }}</span></div>
+                <div class="spec-item"><span class="spec-k">Лимит раундов</span><span class="spec-v">{{ val((core.get('limits') or {}).get('max_rounds')) }}</span></div>
+                {% set cu = core.get('catch_up') or {} %}
+                <div class="spec-item"><span class="spec-k">Догоняние</span><span class="spec-v">
+                    {% if cu.get('enabled') %}{{ cu.get('mechanism') or 'есть' }}
+                    {% elif cu.get('enabled') is sameas false %}нет
+                    {% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+                <div class="spec-item"><span class="spec-k">Длительность</span><span class="spec-v">{{ val(core.get('play_time')) }}</span></div>
+            </div>
+
+            {% set wc = core.get('win_condition') or {} %}
+            <div class="spec-line"><b>Условие победы:</b>
+                {% if wc %}тип {{ val(wc.get('type')) }}, метрика {{ val(wc.get('metric')) }}, порог {{ val(wc.get('threshold')) }}
+                {% else %}<span class="v-null">не указано</span>{% endif %}
+            </div>
+            <div class="spec-line"><b>Условие поражения:</b> {{ val((core.get('loss_condition') or {}).get('type')) }}</div>
+
+            {% if core.get('randomness') %}
+            <div class="spec-line"><b>Случайность:</b>
+                {% for r in core['randomness'] %}<span class="chip-mini">{{ r.get('type') or '?' }}</span>{% endfor %}
+            </div>
+            {% endif %}
+
+            {% if core.get('resources') %}
+            <div class="spec-line"><b>Ресурсы:</b>
+                {% for r in core['resources'] %}<span class="chip-mini">{{ r.get('name') }}{% if r.get('scope') %} ({{ r.get('scope') }}){% endif %}</span>{% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        {# --- надстройка диагностики (v3): она НЕ часть общего контракта --- #}
+        {% if resolution or meta.get('resource_roles') or meta.get('win_paths') %}
+        <div class="mcard">
+            <div class="mcard-title">🔬 Диагностическая надстройка <span class="mcard-count">для симуляции</span></div>
+            <p class="dash-note">Это приватный слой ФинИгроСкопа: он не входит в общий контракт <code>game_spec</code>, но именно по нему симулятор понимает, что можно посчитать, а что — только сыграть живьём.</p>
+
+            {% if resolution %}
+            <div class="spec-line"><b>Как определяются исходы действий:</b></div>
+            <div class="res-list">
+                {% for name, kind in resolution.items() %}
+                {% set rr = resolution_ru.get(kind, (kind, 'res-det')) %}
+                <div class="res-row {{ rr[1] }}">
+                    <code>{{ name }}</code>
+                    <span class="res-kind">{{ rr[0] }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% set subjective = resolution | dictsort | selectattr('1', 'equalto', 'subjective_judgment') | map(attribute='0') | list %}
+            {% if subjective %}
+            <div class="round-note">⚠️ Исход этих действий определяют сами игроки, а не правила: <b>{{ subjective | join(', ') }}</b>. Кодом такое смоделировать по существу нельзя — по ним нужен живой плейтест, и симулятор посчитает их лишь приближённо.</div>
+            {% endif %}
+            {% if meta.get('subjective_notes') %}
+            <div class="qa-why">{{ meta['subjective_notes'] }}</div>
+            {% endif %}
+            {% endif %}
+
+            {% if meta.get('resource_roles') %}
+            <div class="spec-line"><b>Роли ресурсов:</b>
+                {% for name, role in meta['resource_roles'].items() %}
+                <span class="chip-mini">{{ name }} — {{ role_ru.get(role, role) }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="spec-grid">
+                {% set wp = meta.get('win_paths') or {} %}
+                <div class="spec-item"><span class="spec-k">Путей к победе</span><span class="spec-v">
+                    {% if wp.get('multiple') %}несколько{% if wp.get('paths') %}: {{ wp['paths'] | join(', ') }}{% endif %}
+                    {% elif wp.get('multiple') is sameas false %}один
+                    {% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+                {% set tb = meta.get('tie_breaker') or {} %}
+                <div class="spec-item"><span class="spec-k">Тай-брейк</span><span class="spec-v">
+                    {% if tb.get('applicable') is sameas false %}равенство невозможно
+                    {% elif tb.get('present') %}{{ tb.get('description') or 'есть' }}
+                    {% elif tb.get('present') is sameas false %}равенство возможно, правил нет
+                    {% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+                <div class="spec-item"><span class="spec-k">Карты на руках</span><span class="spec-v">{{ val(meta.get('hand_exists')) }}</span></div>
+                {% set ta = meta.get('targeted_actions') or {} %}
+                <div class="spec-item"><span class="spec-k">Действия на игрока</span><span class="spec-v">
+                    {% if ta.get('exists') %}{{ ta.get('actions') | join(', ') or 'есть' }}
+                    {% elif ta.get('exists') is sameas false %}нет
+                    {% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+                {% set sp = meta.get('strict_player_count') or {} %}
+                <div class="spec-item"><span class="spec-k">Строгое число игроков</span><span class="spec-v">
+                    {% if sp.get('strict') %}только {{ val(sp.get('declared')) }}
+                    {% elif sp.get('strict') is sameas false %}нет, диапазон
+                    {% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+                {% set dm = meta.get('difficulty_modes') or {} %}
+                <div class="spec-item"><span class="spec-k">Режимы сложности</span><span class="spec-v">
+                    {% if dm.get('exists') %}{{ dm.get('modes') | join(', ') or 'есть' }}
+                    {% elif dm.get('exists') is sameas false %}нет
+                    {% else %}<span class="v-null">не указано</span>{% endif %}
+                </span></div>
+            </div>
+        </div>
+        {% endif %}
+
+        {# --- нарушения контракта, найденные самопроверкой кода --- #}
+        {% if issues %}
+        <div class="mcard {{ 'mcard-warn' if gs.blocking_issues else '' }}">
+            <div class="mcard-title">🧪 Самопроверка структуры <span class="mcard-count">{{ issues | length }}</span></div>
+            <p class="dash-note">Часть нарушений контракта ломается бесшумно — например, рассинхрон имён действий обнуляет классификацию, и субъективная механика уезжает в симуляцию как обычная числовая. Поэтому их ищет код, а не только сам агент.</p>
+            <ul class="gap-list">
+                {% for i in issues %}
+                <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                    <div class="gap-head">
+                        <code>{{ i.get('code') }}</code>
+                        {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                    </div>
+                    <div class="gap-missing">{{ i.get('message') }}</div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if gtext.get('components') %}
+        <div class="mcard">
+            <div class="mcard-title">🧱 Компоненты <span class="mcard-count">{{ gtext['components'] | length }}</span></div>
+            <div class="comp-table">
+                <div class="comp-row comp-head">
+                    <span>Название</span><span>Кол-во</span><span>Функция</span>
+                </div>
+                {% for c in gtext['components'] %}
+                <div class="comp-row">
+                    <span class="comp-name">{{ c.get('name') }}</span>
+                    <span class="comp-qty">{{ val(c.get('qty')) }}</span>
+                    <span class="comp-fn">{{ val(c.get('function')) }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if gaps %}
+        <div class="mcard {{ 'mcard-warn' if critical else '' }}">
+            <div class="mcard-title">🕳️ Пробелы <span class="mcard-count">{{ gaps | length }}</span></div>
+            <ul class="gap-list">
+                {% for g in gaps %}
+                <li class="gap-item {{ 'gap-critical' if g.get('critical') }}">
+                    <div class="gap-head">
+                        <code>{{ g.get('field') }}</code>
+                        {% if g.get('critical') %}<span class="qa-badge gap-badge">критично</span>{% endif %}
+                        {% if g.get('source') == 'unresolved_by_author' %}<span class="qa-badge qa-badge-ctx">автор не уточнил</span>{% endif %}
+                    </div>
+                    <div class="gap-missing">{{ g.get('missing') }}</div>
+                    {% if g.get('why_matters') %}<div class="qa-why">Почему важно: {{ g.get('why_matters') }}</div>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if ambig %}
+        <div class="mcard">
+            <div class="mcard-title">🔀 Неоднозначности <span class="mcard-count">{{ ambig | length }}</span></div>
+            <ul class="gap-list">
+                {% for a in ambig %}
+                <li class="gap-item">
+                    <div class="gap-head"><code>{{ a.get('field') }}</code></div>
+                    {% if a.get('phrase') %}<div class="gap-missing">«{{ a.get('phrase') }}»</div>{% endif %}
+                    {% if a.get('readings') %}<div class="qa-why">Варианты прочтения: {{ a['readings'] | join(' / ') }}</div>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if gtext.get('concept') or gtext.get('setting') %}
+        <div class="mcard">
+            <div class="mcard-title">📖 Текстовый слой</div>
+            {% if gtext.get('concept') %}<div class="spec-line"><b>Концепт:</b> {{ gtext['concept'] }}</div>{% endif %}
+            {% if gtext.get('setting') %}<div class="spec-line"><b>Сеттинг:</b> {{ gtext['setting'] }}</div>{% endif %}
+            {% if gtext.get('recommendations') %}
+            <div class="spec-line"><b>Рекомендации автора:</b></div>
+            <ul class="open-list">{% for r in gtext['recommendations'] %}<li class="open-item">{{ r }}</li>{% endfor %}</ul>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="next-stage-cta">
+            {% if gs.status == 'accepted' %}
+            <a class="btn btn-primary" href="{{ url_for('skeleton', doc_id=document.id, game_index=game_index) }}">🧩 Собрать скелет-симулятор →</a>
+            {% endif %}
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('spec_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать game_spec.json</a>
+            <span class="cta-hint">структура пойдёт дальше — симуляционист соберёт по ней скелет игры</span>
+        </div>
+
+        <details class="raw-toggle">
+            <summary>Показать сырой JSON</summary>
+            <pre class="json-preview raw-body">{{ gs.spec_json }}</pre>
+        </details>
+    {% endif %}
+</section>
+
+<script>
+(function () {
+    var toggle = document.getElementById("revise-toggle");
+    var form = document.getElementById("revise-form");
+    if (toggle && form) {
+        toggle.addEventListener("click", function () {
+            form.hidden = !form.hidden;
+            if (!form.hidden) form.querySelector("textarea").focus();
+        });
+        // Правка = два вызова модели подряд (понимание + извлечение), это долго.
+        form.addEventListener("submit", function () {
+            var btn = document.getElementById("revise-submit");
+            btn.disabled = true;
+            btn.textContent = "Пересобираем структуру… (до пары минут)";
+        });
+    }
+})();
+</script>
+{% endblock %}

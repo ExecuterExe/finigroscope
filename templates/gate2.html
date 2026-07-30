@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Второй гейт — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set data = ms.gate2_json_dict() or {} %}
+{% set questions = data.get('questions') or [] %}
+{% set resolved = data.get('resolved') or [] %}
+{% set still_open = data.get('still_open') or [] %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">← к структуре игры</a>
+        <h1>Второй гейт: точечные уточнения</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Когда агент раскладывал вашу игру в структуру, вскрылись пробелы, незаметные на уровне текста. Спросить о них может только агент понимания — остальным шагам конвейера домысливать запрещено. Это <b>короткий добор</b>, а не повторная сверка: по карте понимания вас никто заново вести не будет.</p>
+    </div>
+
+    {% if ms.gate2_error %}
+    <div class="mirror-error">
+        <span>🛑 {{ ms.gate2_error }}</span>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('gate2', doc_id=document.id, game_index=game_index) }}">Попробовать снова</a>
+    </div>
+    {% endif %}
+
+    {# --- что именно нашёл извлеченец --- #}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🕳️ Критичные пробелы структуры <span class="mcard-count">{{ gaps | length }}</span></div>
+        <ul class="gap-list">
+            {% for g in gaps %}
+            <li class="gap-item gap-critical">
+                <div class="gap-head"><code>{{ g.get('field') }}</code><span class="qa-badge gap-badge">критично</span></div>
+                <div class="gap-missing">{{ g.get('missing') }}</div>
+                {% if g.get('why_matters') %}<div class="qa-why">Почему важно: {{ g.get('why_matters') }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    {% if ms.gate2_status == 'asked' and questions %}
+        <div class="round-note">Гейт открывается <b>один раз</b>. Отвечайте только на то, что знаете, — на остальное честно напишите, что уточнить не получится: пробел останется зафиксированным, и конвейер пойдёт дальше.</div>
+
+        <div class="mcard mcard-accent">
+            <div class="mcard-title">❓ Вопросы агента <span class="mcard-count">{{ questions | length }}</span></div>
+            <ol class="qa-list">
+                {% for q in questions %}
+                <li class="qa-item">
+                    <div class="qa-question">
+                        {{ q.get('question') }}
+                        {% if q.get('type') == 'components' %}<span class="qa-badge qa-badge-comp">компоненты</span>
+                        {% elif q.get('type') == 'diagnostic' %}<span class="qa-badge qa-badge-ctx">диагностика</span>
+                        {% elif q.get('type') == 'context' %}<span class="qa-badge qa-badge-ctx">контекст</span>{% endif %}
+                    </div>
+                    {% if q.get('why') %}<div class="qa-why">Зачем: {{ q.get('why') }}</div>{% endif %}
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+
+        <form class="mirror-reply-form" id="gate2-form" method="post"
+              action="{{ url_for('gate2_reply', doc_id=document.id, game_index=game_index) }}">
+            <label class="field">
+                <span class="field-label">Ваш ответ агенту</span>
+                <textarea class="field-input mirror-textarea" name="answer" rows="7"
+                          placeholder="Ответьте по номерам. Если по какому-то пункту уточнить не получится — так и напишите." required></textarea>
+            </label>
+            <div class="mirror-form-actions">
+                <button class="btn btn-primary" type="submit" id="gate2-submit">Отправить и пересобрать структуру</button>
+                <span class="mirror-form-hint">Ответы войдут в подтверждённый текст, структура соберётся заново.</span>
+            </div>
+        </form>
+
+    {% elif ms.gate2_status == 'done' %}
+        {% if resolved or ms.gate2_answer %}
+        <div class="mirror-badge badge-ready">✅ Второй гейт пройден.</div>
+        {% else %}
+        <div class="mirror-badge badge-ready">✅ Спрашивать нечего — агент решил, что эти пробелы уже разбирались на сверке.</div>
+        {% endif %}
+
+        {% if resolved %}
+        <div class="mcard">
+            <div class="mcard-title">✔️ Закрытые пробелы <span class="mcard-count">{{ resolved | length }}</span></div>
+            <ul class="clar-list">
+                {% for r in resolved %}
+                <li class="clar-item">
+                    {% if r.get('field') %}<div class="clar-q"><code>{{ r.get('field') }}</code></div>{% endif %}
+                    <div class="clar-a">{{ r.get('answer') }}</div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if still_open %}
+        <div class="mcard mcard-warn">
+            <div class="mcard-title">⚠️ Осталось непокрытым <span class="mcard-count">{{ still_open | length }}</span></div>
+            <ul class="open-list">
+                {% for o in still_open %}
+                <li class="open-item">
+                    <b>{{ o.get('field') or o.get('item') }}</b>
+                    {% if o.get('reason') %} — <span class="open-reason">{{ o.get('reason') }}</span>{% endif %}
+                    {% if o.get('critical') %}<span class="qa-badge gap-badge">критично</span>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if ms.simulation_blocking is not none %}
+        <div class="mcard">
+            <div class="mcard-title">🎲 Числовая ветка</div>
+            <p class="mcard-understanding">
+                {% if ms.simulation_blocking %}Оставшиеся пробелы <b>блокируют симуляцию</b>: игру можно провести только по содержательной ветке, и в отчёте будет отмечено, что числовая часть не выполнялась.
+                {% else %}Оставшиеся пробелы симуляцию <b>не блокируют</b> — числовая ветка может идти как обычно.{% endif %}
+            </p>
+        </div>
+        {% endif %}
+
+        <div class="next-stage-cta">
+            <a class="btn btn-primary" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">К обновлённой структуре игры →</a>
+            <span class="cta-hint">структура пересобрана с учётом ваших ответов</span>
+        </div>
+    {% elif not ms.gate2_error %}
+        <div class="mirror-loading">Агент отбирает, что ещё стоит спросить…</div>
+    {% endif %}
+
+    {% if ms.gate2_answer %}
+    <div class="mcard">
+        <div class="mcard-title">💬 Ваш ответ</div>
+        <div class="clar-item"><div class="clar-a">{{ ms.gate2_answer }}</div></div>
+    </div>
+    {% endif %}
+
+    {% if ms.gate2_text %}
+    <details class="raw-toggle">
+        <summary>Показать полный текст ответа агента</summary>
+        <div class="agent-bubble-text raw-body">{{ ms.gate2_text | markdown | safe }}</div>
+    </details>
+    {% endif %}
+</section>
+
+<script>
+// Обращение к агенту синхронное и может занимать до минуты, а здесь за ним ещё
+// и повторное извлечение структуры — без подсказки страница выглядит зависшей.
+(function () {
+    var form = document.getElementById("gate2-form");
+    if (!form) return;
+    form.addEventListener("submit", function () {
+        var btn = document.getElementById("gate2-submit");
+        btn.disabled = true;
+        btn.textContent = "Учитываем ответ и пересобираем структуру…";
+    });
+})();
+</script>
+{% endblock %}

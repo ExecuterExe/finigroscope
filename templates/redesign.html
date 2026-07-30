@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Авто-редизайн — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set res = (current.result() if current else None) or {} %}
+{% set ladder_ru = {1: 'подстройка числа', 2: 'отключение элемента', 3: 'добавление нового'} %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('balance', doc_id=document.id, game_index=game_index) }}">← к оценке баланса</a>
+        <h1>Авто-редизайн</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Агент чинит найденные недочёты <b>минимально достаточным</b> вмешательством: сначала подстройка числа, при необходимости — отключение мёртвого элемента, и <b>никогда</b> — добавление нового. Всё, что требует нового правила, уходит в рекомендации вам, а не в структуру.</p>
+    </div>
+
+    {# --- условие вызова: агента зовут, только если есть критичное --- #}
+    <div class="mcard {{ 'mcard-warn' if trigger.trigger else '' }}">
+        <div class="mcard-title">🔔 Нужен ли авто-редизайн</div>
+        {% if trigger.trigger %}
+        <p class="mcard-understanding">⚠️ Да — {{ trigger.reason }}.</p>
+        <p class="dash-note">Правка запускается только по критичным находкам. Некритичные флаги структуру не трогают: над-коррекция хуже недо-коррекции.</p>
+        {% else %}
+        <p class="mcard-understanding">✅ Нет — {{ trigger.reason }}.</p>
+        <p class="dash-note">Агент не вызывается: менять параметры игры без критичной находки незачем.</p>
+        {% endif %}
+        <div class="spec-line">
+            <b>Попыток использовано:</b> {{ used }} из {{ max_attempts }}.
+            {% if used >= max_attempts %}Лимит исчерпан — оставшиеся находки уйдут в рекомендации.{% endif %}
+        </div>
+    </div>
+
+    {% if current and current.error %}
+    <div class="mirror-error"><span>🛑 {{ current.error }}</span></div>
+    {% endif %}
+
+    {% if current and current.result_json %}
+    {# --- предложение автору ------------------------------------------------ #}
+    <div class="mirror-badge badge-open">
+        ✍️ Попытка {{ current.attempt_number }}: агент предлагает {{ current.changes | length }} правк{{ 'у' if current.changes|length == 1 else 'и' }}. Режим — {{ current.mode }}.
+    </div>
+
+    {% if current.changes %}
+    <div class="mcard mcard-accent">
+        <div class="mcard-title">🔧 Предлагаемые изменения <span class="mcard-count">{{ current.changes | length }}</span></div>
+        <ul class="gap-list">
+            {% for ch in current.changes %}
+            <li class="gap-item">
+                <div class="gap-head">
+                    <code>{{ ch.get('field') }}</code>
+                    <span class="qa-badge">ступень {{ ch.get('ladder') }} — {{ ladder_ru.get(ch.get('ladder'), '') }}</span>
+                    {% if ch.get('subtraction_test') %}<span class="qa-badge qa-badge-ctx">проверка вычитанием</span>{% endif %}
+                </div>
+                <div class="gap-missing">
+                    {% if ch.get('op') %}{{ ch['op'] }}: <b>{{ ch.get('element') }}</b>
+                    {% else %}<b>{{ ch.get('from') }}</b> → <b>{{ ch.get('to') }}</b>{% endif %}
+                    {% if ch.get('detail') %} — {{ ch['detail'] }}{% endif %}
+                </div>
+                <div class="qa-why">Нацелена на: {{ ch.get('addresses') }}</div>
+                {% if ch.get('synced') %}<div class="qa-why">Синхронизировано: {{ ch['synced'] | join('; ') }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if res.get('tradeoffs') %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">⚖️ Возможные побочные эффекты</div>
+        <ul class="open-list">{% for t in res['tradeoffs'] %}<li class="open-item">{{ t }}</li>{% endfor %}</ul>
+        <p class="desc-hint">Агент не обещает результат — подтвердит только повторный прогон симуляции.</p>
+    </div>
+    {% endif %}
+
+    {% if res.get('handed_to_recommendations') %}
+    <div class="mcard">
+        <div class="mcard-title">📨 Передано вам как рекомендации <span class="mcard-count">{{ res['handed_to_recommendations'] | length }}</span></div>
+        <p class="dash-note">Это то, что агент чинить не имеет права: новое правило, социальная механика или находка на «мягком» числе. Решение за вами.</p>
+        <ul class="gap-list">
+            {% for r in res['handed_to_recommendations'] %}
+            <li class="gap-item">
+                <div class="gap-missing">{{ r.get('finding') }}</div>
+                {% if r.get('suggestion') %}<div class="qa-why">Что можно сделать: {{ r['suggestion'] }}</div>{% endif %}
+                {% if r.get('why_not_auto') %}<div class="qa-why">Почему не автоматически: {{ r['why_not_auto'] }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if res.get('not_touched') %}
+    <div class="mcard">
+        <div class="mcard-title">⏸️ Отложено осознанно <span class="mcard-count">{{ res['not_touched'] | length }}</span></div>
+        <ul class="open-list">
+            {% for n in res['not_touched'] %}
+            <li class="open-item"><b>{{ n.get('finding') }}</b>{% if n.get('severity') %} <span class="chip-mini">{{ n['severity'] }}</span>{% endif %} — {{ n.get('why') }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if res.get('kept_intent') %}
+    <div class="mcard">
+        <div class="mcard-title">🎯 Замысел сохранён</div>
+        <div class="spec-line">{% for k in res['kept_intent'] %}<span class="chip-mini">{{ k }}</span>{% endfor %}</div>
+    </div>
+    {% endif %}
+
+    {% if current.issues() %}
+    <div class="mcard {{ 'mcard-warn' if current.blocking_issues else '' }}">
+        <div class="mcard-title">🧪 Самопроверка правки <span class="mcard-count">{{ current.issues() | length }}</span></div>
+        <p class="dash-note">Три нарушения здесь не проявятся до следующей итерации: новое поле в разделяемом контракте, рассинхрон классификации действий и правка по числу, которое ничего не измеряло. Поэтому их ищет код.</p>
+        <ul class="gap-list">
+            {% for i in current.issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head">
+                    <code>{{ i.get('code') }}</code>
+                    {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="mcard accept-card">
+        <div class="mcard-title">🤝 Принять правку?</div>
+        {% if current.blocking_issues %}
+        <p class="dash-note">⚠️ Самопроверка нашла важные нарушения (выше). Принимать такую правку не стоит — лучше запросить новую.</p>
+        {% else %}
+        <p class="dash-note">Если примете — структура игры обновится, а скелет и статистика сбросятся: прежние числа к новой версии не относятся, игру нужно будет пересимулировать.</p>
+        {% endif %}
+        <form method="post" action="{{ url_for('redesign_decide', doc_id=document.id, game_index=game_index) }}">
+            <div class="accept-actions">
+                <button class="btn btn-primary" type="submit" name="action" value="accept">Принять и пересимулировать</button>
+                <button class="btn btn-ghost" type="submit" name="action" value="reject">Отклонить</button>
+            </div>
+        </form>
+    </div>
+
+    <details class="raw-toggle">
+        <summary>Показать ответ агента целиком</summary>
+        <pre class="json-preview raw-body">{{ current.result_json }}</pre>
+    </details>
+
+    {% elif trigger.trigger and used < max_attempts %}
+    <div class="next-stage-cta">
+        <form method="post" action="{{ url_for('redesign_propose', doc_id=document.id, game_index=game_index) }}" id="propose-form">
+            <button class="btn btn-primary" type="submit" id="propose-btn">Предложить правку</button>
+        </form>
+        <span class="cta-hint">агент сделает один шаг: не больше четырёх изменений, минимально достаточных</span>
+    </div>
+    {% endif %}
+
+    {# --- история попыток: она же защита от осцилляции --- #}
+    {% set decided = attempts | rejectattr('status', 'equalto', 'proposed') | list %}
+    {% if decided %}
+    <div class="mcard">
+        <div class="mcard-title">🕘 История попыток <span class="mcard-count">{{ decided | length }}</span></div>
+        <p class="dash-note">История уходит агенту на вход: рычаг, который уже двигали, повторно двигать нельзя — иначе цикл «поднял → перелетел → опустил» крутится впустую.</p>
+        <ul class="clar-list">
+            {% for a in decided %}
+            <li class="clar-item">
+                <div class="clar-q">
+                    Попытка {{ a.attempt_number }} · {{ 'принята' if a.status == 'accepted' else 'отклонена' }}
+                    {% if a.trigger_reason %}<span class="chip-mini">{{ a.trigger_reason }}</span>{% endif %}
+                </div>
+                <div class="clar-a">
+                    {% for ch in a.changes %}
+                    <div><code>{{ ch.get('field') }}</code>: {{ ch.get('from') }} → {{ ch.get('to') }}{% if ch.get('op') %} ({{ ch['op'] }} {{ ch.get('element') }}){% endif %}</div>
+                    {% else %}
+                    <div>изменений не было</div>
+                    {% endfor %}
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+(function () {
+    var form = document.getElementById("propose-form");
+    if (!form) return;
+    form.addEventListener("submit", function () {
+        var btn = document.getElementById("propose-btn");
+        btn.disabled = true;
+        btn.textContent = "Агент подбирает правку…";
+    });
+})();
+</script>
+{% endblock %}

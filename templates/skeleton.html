@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Скелет-симулятор — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+<section class="mirror-screen skeleton-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">← к структуре игры</a>
+        <h1>Скелет-симулятор игры</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Агент-симуляционист собрал по принятой структуре <code>game_skeleton.py</code> — технический костяк, который прогоняет партию тысячи раз. Здесь показан <b>только сам скелет</b>: статистик, винрейтов и оценок тут нет — они появятся на следующем шаге, когда код прогонят.</p>
+    </div>
+
+    {% if sk.error %}
+    <div class="mirror-error">
+        <span>🛑 {{ sk.error }}</span>
+        <form method="post" action="{{ url_for('skeleton_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">Попробовать снова</button>
+        </form>
+    </div>
+
+    {% elif sk.simulatable is none %}
+    <div class="mirror-loading">Симуляционист пишет скелет…</div>
+
+    {% elif sk.simulatable %}
+    <div class="mirror-badge badge-ready">✅ Игра симулируема — скелет собран.</div>
+
+    <div class="mcard">
+        <div class="mcard-title">👥 Число игроков в прогоне</div>
+        <div class="spec-line">
+            {% if sk.player_counts() %}
+                {% for pc in sk.player_counts() %}<span class="chip-mini">{{ pc }}</span>{% endfor %}
+            {% else %}<span class="v-null">не указано агентом</span>{% endif %}
+        </div>
+    </div>
+
+    {% if sk.assumptions() %}
+    <div class="mcard mcard-accent">
+        <div class="mcard-title">📌 Ключевые допущения <span class="mcard-count">{{ sk.assumptions() | length }}</span></div>
+        <ul class="open-list">
+            {% for a in sk.assumptions() %}<li class="open-item">{{ a }}</li>{% endfor %}
+        </ul>
+        <p class="desc-hint">То, чего не было в структуре игры, агент честно смоделировал случайной величиной и пометил допущением — а не выдал за факт.</p>
+    </div>
+    {% endif %}
+
+    <div class="mcard">
+        <div class="mcard-title">🧩 Код скелета <code>game_skeleton.py</code></div>
+        <pre class="code-block"><code>{{ sk.code }}</code></pre>
+    </div>
+
+    <div class="next-stage-cta">
+        <a class="btn btn-primary" href="{{ url_for('balance', doc_id=document.id, game_index=game_index) }}">📊 Оценить баланс по статистике →</a>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('skeleton_code', doc_id=document.id, game_index=game_index) }}">⬇ Скачать game_skeleton.py</a>
+        <form method="post" action="{{ url_for('skeleton_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit" id="regen-btn">↻ Пересобрать скелет</button>
+        </form>
+        <span class="cta-hint">файл можно вставить на online-python.com и запустить — он сам напечатает статистику</span>
+    </div>
+
+    {% else %}
+    <div class="mirror-badge badge-open">⚠️ Игру нельзя симулировать по текущей структуре.</div>
+
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🚫 Почему скелет не собран</div>
+        <p class="mcard-understanding">{{ sk.reason }}</p>
+        {% if sk.missing() %}
+        <div class="spec-line"><b>Чего не хватило в структуре:</b>
+            {% for m in sk.missing() %}<span class="chip-mini">{{ m }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        <p class="desc-hint">Симуляционист намеренно не додумывает недостающие правила: пустой результат честнее кривого. Эти пробелы можно закрыть, вернувшись к структуре игры и уточнив её.</p>
+    </div>
+
+    <div class="next-stage-cta">
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">← к структуре игры</a>
+        <form method="post" action="{{ url_for('skeleton_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">↻ Прогнать симуляциониста ещё раз</button>
+        </form>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+// Прогон симуляциониста синхронный и может занимать до минуты — подсказка,
+// чтобы страница не выглядела зависшей после нажатия «Пересобрать».
+(function () {
+    document.querySelectorAll('form[action*="/skeleton/"][action$="/retry"]').forEach(function (form) {
+        form.addEventListener("submit", function () {
+            var btn = form.querySelector("button");
+            if (btn) { btn.disabled = true; btn.textContent = "Симуляционист пишет код…"; }
+        });
+    });
+})();
+</script>
+{% endblock %}

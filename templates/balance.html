@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}Баланс по статистике — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set rep = br.report() or {} %}
+{% set checks = rep.get('checks') or [] %}
+{% set flags = rep.get('flags') or [] %}
+{% set verdict_meta = {
+    'ok':      ('✅', 'st-ok',   'норма'),
+    'warn':    ('⚠️', 'st-warn', 'замечание'),
+    'problem': ('❌', 'st-miss', 'проблема'),
+    'n/a':     ('➖', 'st-absent', 'не применимо')
+} %}
+{% set check_titles = {
+    'seat_fairness': 'Справедливость по местам',
+    'win_reachability': 'Достижимость победы',
+    'duration': 'Длительность и разброс',
+    'action_space': 'Пространство действий',
+    'economy_runaway': 'Экономика и отрыв',
+    'eliminations': 'Вылеты'
+} %}
+{% set severity_ru = {'critical': 'критично', 'major': 'существенно', 'minor': 'терпимо'} %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('skeleton', doc_id=document.id, game_index=game_index) }}">← к скелету игры</a>
+        <h1>Баланс по статистике</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Агент прогоняет статистику симуляции через шесть проверок с числовыми порогами. Он оценивает <b>технический</b> баланс — тему, дизайн и ощущения за столом здесь не оценивают, для этого есть отдельный шаг.</p>
+    </div>
+
+    {% if br.error %}
+    <div class="mirror-error"><span>🛑 {{ br.error }}</span></div>
+    {% endif %}
+
+    {% if not br.has_stats %}
+    {# --- приём статистики ------------------------------------------------- #}
+    <div class="mcard mcard-accent">
+        <div class="mcard-title">📥 Нужна статистика прогона</div>
+        <p class="dash-note">Скелет собран, но его ещё никто не запускал. Самый безопасный путь — прогнать его самостоятельно: откройте <a href="https://www.online-python.com/" target="_blank" rel="noopener">online-python.com</a>, вставьте <a href="{{ url_for('skeleton_code', doc_id=document.id, game_index=game_index) }}">скачанный файл</a> целиком и нажмите Run. Внизу вывода будет строка «JSON ДЛЯ ОЦЕНКИ БАЛАНСА» — скопируйте всё, что после неё, и вставьте сюда.</p>
+
+        <form method="post" action="{{ url_for('balance_stats', doc_id=document.id, game_index=game_index) }}">
+            <label class="field">
+                <span class="field-label">STATS_JSON (список конфигураций)</span>
+                <textarea class="field-input mirror-textarea json-input" name="stats" rows="10"
+                          placeholder='[{"games": 2000, "num_players": 2, "win_rate_by_seat": {...}, ...}]' required></textarea>
+            </label>
+            <div class="mirror-form-actions">
+                <button class="btn btn-primary" type="submit">Загрузить статистику</button>
+                <span class="mirror-form-hint">Сервис ничего не выполняет — только читает числа.</span>
+            </div>
+        </form>
+    </div>
+
+    <details class="raw-toggle">
+        <summary>Или запустить скелет прямо здесь</summary>
+        <div class="raw-body">
+            <p class="dash-note">⚠️ Это выполнит на сервере код, <b>написанный языковой моделью</b>. Он запускается отдельным процессом, во временной папке, с таймаутом и без переменных с ключами API — но это не настоящая песочница: у процесса те же права, что у вас, включая доступ к файлам и сети. Пользуйтесь, только если доверяете содержимому скелета (его можно прочитать целиком на предыдущем экране).</p>
+            <form method="post" action="{{ url_for('balance_stats', doc_id=document.id, game_index=game_index) }}"
+                  id="run-local-form">
+                <input type="hidden" name="action" value="run_local">
+                <button class="btn btn-ghost" type="submit" id="run-local-btn">▶ Прогнать скелет локально</button>
+                <span class="cta-hint">2000 партий на конфигурацию — обычно занимает секунды, лимит 2 минуты</span>
+            </form>
+        </div>
+    </details>
+
+    {% else %}
+    {# --- статистика есть -------------------------------------------------- #}
+    <div class="mirror-badge badge-ready">
+        📊 Статистика загружена
+        {%- if br.stats_source == 'local' %} (локальный прогон){% else %} (вставлена вручную){% endif -%}
+        : конфигураций — {{ (br.stats() or []) | length }}.
+    </div>
+
+    {# Разложение считает код, а не модель: именно на этой арифметике прошлая
+       версия агента путала неразрешённые ничьи с недостижимой победой. #}
+    {% if breakdown %}
+    <div class="mcard">
+        <div class="mcard-title">🎯 Почему в партии не было победителя</div>
+        <p class="dash-note">Ничья и недостижимая победа выглядят в статистике одинаково («победителя нет»), но лечатся противоположными правками. Разложение считает сервис, а не модель.</p>
+        <div class="comp-table">
+            <div class="comp-row comp-head bd-row">
+                <span>Игроков</span><span>Без победителя</span><span>из них ничьи</span><span>истинная недостижимость</span>
+            </div>
+            {% for b in breakdown %}
+            <div class="comp-row bd-row">
+                <span class="comp-name">{{ b.num_players }}</span>
+                <span>{{ '%.1f' % (b.no_winner_rate * 100) }}%</span>
+                <span>{{ '%.1f' % (b.tie_share * 100) }}%</span>
+                <span class="{{ 'bd-bad' if b.unreachable_total > 0.15 else '' }}">{{ '%.1f' % (b.unreachable_total * 100) }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if soft %}
+    <div class="round-note">Действия с «мягкими» числами: <b>{{ soft | join(', ') }}</b>. Их исход в игре определяют сами игроки, симулятор моделирует их случайной величиной — поэтому по таким числам агенту запрещено выносить вердикт «проблема» и предлагать правки механики.</div>
+    {% endif %}
+
+    {% if rep %}
+        {% set scores = rep.get('scores') or {} %}
+        <div class="mcard mcard-accent">
+            <div class="mcard-title">📈 Баллы</div>
+            <div class="spec-grid">
+                <div class="spec-item"><span class="spec-k">Баланс</span><span class="spec-v score-big">{{ scores.get('balance', '—') }}<span class="score-max">/10</span></span></div>
+                <div class="spec-item"><span class="spec-k">Достижимость победы</span><span class="spec-v score-big">{{ scores.get('win_reachability', '—') }}<span class="score-max">/10</span></span></div>
+                <div class="spec-item"><span class="spec-k">Режим чтения</span><span class="spec-v">{{ rep.get('mode') or '—' }}</span></div>
+                <div class="spec-item"><span class="spec-k">Конфигурации</span><span class="spec-v">{{ (rep.get('configs_analyzed') or []) | join(', ') or '—' }}</span></div>
+            </div>
+            {% if rep.get('score_rationale') %}
+            <div class="qa-why">{{ rep['score_rationale'] }}</div>
+            {% endif %}
+        </div>
+
+        {% if checks %}
+        <div class="mcard">
+            <div class="mcard-title">🔍 Шесть проверок</div>
+            <div class="map-grid">
+                {% for ch in checks %}
+                {% set vm = verdict_meta.get(ch.get('verdict'), ('•', 'st-warn', ch.get('verdict'))) %}
+                <div class="map-node {{ vm[1] }}">
+                    <span class="map-icon">{{ vm[0] }}</span>
+                    <div class="map-body">
+                        <div class="map-name">
+                            {{ check_titles.get(ch.get('id'), ch.get('id')) }}
+                            {% if ch.get('confidence') == 'assumed' %}<span class="qa-badge qa-badge-ctx">мягкое число</span>{% endif %}
+                        </div>
+                        {% if ch.get('evidence') %}<div class="map-note">{{ ch['evidence'] }}</div>{% endif %}
+                        {% if ch.get('recommendation') %}<div class="qa-why">Что делать: {{ ch['recommendation'] }}</div>{% endif %}
+                    </div>
+                    <span class="map-tag">{{ vm[2] }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if flags %}
+        <div class="mcard mcard-warn">
+            <div class="mcard-title">🚩 Красные флаги <span class="mcard-count">{{ flags | length }}</span></div>
+            <ul class="gap-list">
+                {% for f in flags %}
+                <li class="gap-item {{ 'gap-critical' if f.get('severity') == 'critical' }}">
+                    <div class="gap-head">
+                        <code>{{ f.get('code') }}</code>
+                        <span class="qa-badge sev-{{ f.get('severity') }}">{{ severity_ru.get(f.get('severity'), f.get('severity')) }}</span>
+                        {% if f.get('confidence') == 'assumed' %}<span class="qa-badge qa-badge-ctx">мягкое число</span>{% endif %}
+                        {% if f.get('affected_configs') %}<span class="chip-mini">при N = {{ f['affected_configs'] | join(', ') }}</span>{% endif %}
+                    </div>
+                    <div class="gap-missing">{{ f.get('detail') }}</div>
+                    {% if f.get('where') %}<div class="qa-why">Где: <code>{{ f['where'] }}</code></div>{% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {# Авто-редизайн предлагается ТОЛЬКО при критичных флагах: менять
+           параметры игры без критичной находки незачем. Условие считает код. #}
+        {% set crit = flags | selectattr('severity', 'equalto', 'critical')
+                            | rejectattr('confidence', 'equalto', 'assumed') | list %}
+        {% if crit %}
+        <div class="mcard mcard-warn">
+            <div class="mcard-title">🔧 Можно починить автоматически</div>
+            <p class="dash-note">Найдено критичное ({{ crit | map(attribute='code') | join(', ') }}). Авто-редизайнер предложит <b>минимальную</b> правку параметров — не больше четырёх изменений, без выдумывания новых механик. Решение принять останется за вами.</p>
+            <div class="accept-actions">
+                <a class="btn btn-primary" href="{{ url_for('redesign', doc_id=document.id, game_index=game_index) }}">Перейти к авто-редизайну →</a>
+                <span class="cta-hint">после принятия правки игру нужно будет пересимулировать</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if rep.get('priority_fixes') %}
+        <div class="mcard">
+            <div class="mcard-title">🔧 Приоритетные правки <span class="mcard-count">{{ rep['priority_fixes'] | length }}</span></div>
+            <p class="dash-note">Каждая правка указывает конкретное поле и направление — в таком виде её сможет применить авто-редизайнер. Правок по «мягким» числам здесь быть не должно.</p>
+            <ol class="qa-list">
+                {% for fix in rep['priority_fixes'] %}
+                <li class="qa-item">
+                    <div class="qa-question"><code>{{ fix.get('target') }}</code> — {{ fix.get('direction') }}</div>
+                    {% if fix.get('closes') %}<div class="qa-why">Закрывает: {{ fix['closes'] }}</div>{% endif %}
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+
+        {% if rep.get('notes_for_lenses') %}
+        <div class="mcard">
+            <div class="mcard-title">📝 Заметки для содержательной оценки</div>
+            <p class="dash-note">То, что числами не измеряется: эти наблюдения уйдут агенту линз, а не в правки механики.</p>
+            <ul class="open-list">
+                {% for n in rep['notes_for_lenses'] %}<li class="open-item">{{ n }}</li>{% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if rep.get('covered_tests') %}
+        <div class="mcard">
+            <div class="mcard-title">✔️ Закрытые тесты методички <span class="mcard-count">{{ rep['covered_tests'] | length }}</span></div>
+            <p class="dash-note">Список нужен следующему агенту-диагносту, чтобы он не пересчитывал уже закрытое и не выносил по тем же числам другой вердикт.</p>
+            <div class="comp-table">
+                {% for t in rep['covered_tests'] %}
+                <div class="comp-row">
+                    <span class="comp-name">тест {{ t.get('test') }}</span>
+                    <span class="comp-qty">{{ 'полностью' if t.get('coverage') == 'full' else 'частично' }}</span>
+                    <span class="comp-fn">{{ t.get('note') }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if br.issues() %}
+        <div class="mcard {{ 'mcard-warn' if br.blocking_issues else '' }}">
+            <div class="mcard-title">🧪 Самопроверка отчёта <span class="mcard-count">{{ br.issues() | length }}</span></div>
+            <p class="dash-note">Две ошибки этого агента дорогие и при этом незаметные в отчёте: ничья, посчитанная недостижимой победой (правка уйдёт в порог победы вместо правила ничьей), и вердикт «проблема» на числе, которое симулятор сам придумал. Поэтому их ищет код.</p>
+            <ul class="gap-list">
+                {% for i in br.issues() %}
+                <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                    <div class="gap-head">
+                        <code>{{ i.get('code') }}</code>
+                        {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                    </div>
+                    <div class="gap-missing">{{ i.get('message') }}</div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <div class="next-stage-cta">
+            <a class="btn btn-ghost btn-sm" href="{{ url_for('balance_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать Finding_balance.json</a>
+            <form method="post" action="{{ url_for('balance_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+                <button class="btn btn-ghost btn-sm" type="submit" id="retry-btn">↻ Переоценить</button>
+            </form>
+            <span class="cta-hint">отчёт пойдёт дальше — в правки, диагностику и содержательную оценку</span>
+        </div>
+
+        <details class="raw-toggle">
+            <summary>Показать статистику прогона (STATS_JSON)</summary>
+            <pre class="json-preview raw-body">{{ br.stats_json }}</pre>
+        </details>
+    {% elif not br.error %}
+        <div class="mirror-loading">Агент разбирает статистику…</div>
+    {% endif %}
+    {% endif %}
+</section>
+
+<script>
+// Локальный прогон и обращение к модели — синхронные и не мгновенные.
+(function () {
+    var pairs = [["run-local-form", "run-local-btn", "Гоняем партии…"],
+                 [null, "retry-btn", "Агент разбирает статистику…"]];
+    pairs.forEach(function (p) {
+        var btn = document.getElementById(p[1]);
+        if (!btn) return;
+        var form = p[0] ? document.getElementById(p[0]) : btn.closest("form");
+        if (!form) return;
+        form.addEventListener("submit", function () {
+            btn.disabled = true;
+            btn.textContent = p[2];
+        });
+    });
+})();
+</script>
+{% endblock %}

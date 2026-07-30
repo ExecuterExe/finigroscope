@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Настройки ИИ — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('dashboard') }}">← в кабинет</a>
+        <h1>Какой ИИ работает в сервисе</h1>
+        <p class="mirror-intro">Все ИИ-агенты конвейера (понимание игры, извлеченец, симуляционист) ходят к LLM через одну абстракцию. Вендор — сменная деталь: выберите здесь, и агенты сразу начнут обращаться к нему. Перезапуск нужен только чтобы подхватить новый ключ из <code>.env</code>.</p>
+    </div>
+
+    {# --- что активно прямо сейчас --- #}
+    <div class="mcard mcard-accent">
+        <div class="mcard-title">⚡ Сейчас используется</div>
+        <div class="spec-grid">
+            <div class="spec-item"><span class="spec-k">Провайдер</span><span class="spec-v">
+                {{ status.title }}
+                {% if not status.known %}<span class="qa-badge gap-badge">неизвестный</span>{% endif %}
+            </span></div>
+            <div class="spec-item"><span class="spec-k">Модель</span><span class="spec-v">
+                {% if status.model %}<code>{{ status.model }}</code>{% else %}<span class="v-null">не выбрана</span>{% endif %}
+            </span></div>
+            <div class="spec-item"><span class="spec-k">Откуда решение</span><span class="spec-v">{{ status.source }}</span></div>
+            <div class="spec-item"><span class="spec-k">Доступ</span><span class="spec-v">
+                {% if not status.requires %}<span class="st-miss-text">не требуется</span>
+                {% elif status.configured %}<span class="st-ok-text">✅ {{ status.requires }} задан</span>
+                {% else %}<span class="st-miss-text">— нет {{ status.requires }}</span>{% endif %}
+            </span></div>
+        </div>
+
+        {% if status.forced %}
+        <div class="round-note">Активен жёсткий override <code>LLM_PROVIDER_FORCE</code> — выбор на этой странице сейчас игнорируется. Так работают тесты; для обычной работы уберите эту переменную из окружения.</div>
+        {% elif not status.configured %}
+        <div class="round-note">Провайдер выбран, но ключа нет — агенты будут честно сообщать о недоступности ИИ. Впишите ключ в <code>.env</code> и перезапустите сервер.</div>
+        {% endif %}
+
+        <form class="inline-form" method="post" action="{{ url_for('llm_settings_test') }}">
+            <button class="btn btn-primary btn-sm" type="submit" id="test-btn">🔌 Проверить связь</button>
+            <span class="cta-hint">настоящий короткий запрос к модели, без кэша — покажет реальную ошибку, если что-то не так</span>
+        </form>
+    </div>
+
+    {# --- выбор провайдера --- #}
+    <form method="post" action="{{ url_for('llm_settings_save') }}" id="provider-form">
+        <div class="mcard">
+            <div class="mcard-title">🔀 Выбрать провайдера <span class="mcard-count">{{ catalog | length }}</span></div>
+            <div class="llm-list">
+                {% for p in catalog %}
+                <label class="llm-option {{ 'llm-active' if p.name == status.provider }}">
+                    <input type="radio" name="provider" value="{{ p.name }}"
+                           {% if p.name == status.provider %}checked{% endif %}
+                           data-default-model="{{ p.default_model or '' }}">
+                    <span class="llm-body">
+                        <span class="llm-head">
+                            <b>{{ p.title }}</b>
+                            <code class="llm-id">{{ p.name }}</code>
+                            {% if p.free_tier %}<span class="qa-badge qa-badge-ctx">есть бесплатно</span>{% endif %}
+                            {# бейдж настроенности рисуем только тем, кому вообще
+                               что-то нужно задать — у заглушки «null» он бессмыслен #}
+                            {% if p.requires %}
+                                {% if p.configured %}<span class="qa-badge llm-badge-ok">ключ есть</span>
+                                {% else %}<span class="qa-badge gap-badge">нужен {{ p.requires }}</span>{% endif %}
+                            {% endif %}
+                        </span>
+                        {% if p.notes %}<span class="llm-note">{{ p.notes }}</span>{% endif %}
+                        <span class="llm-meta">
+                            {% if p.default_model %}модель по умолчанию: <code>{{ p.default_model }}</code>{% endif %}
+                            {% if p.key_url %} · <a href="{{ p.key_url }}" target="_blank" rel="noopener">получить ключ ↗</a>{% endif %}
+                        </span>
+                    </span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="mcard">
+            <div class="mcard-title">🎯 Модель <span class="mcard-count">не обязательно</span></div>
+            <p class="dash-note">Оставьте пустым — возьмётся модель по умолчанию, а у OpenRouter вдобавок включится автопереключение при перегрузке. Заполните, чтобы <b>закрепить</b> конкретную модель (тогда подмены не будет).</p>
+            <label class="field">
+                <span class="field-label">Имя модели</span>
+                <input class="field-input" type="text" name="model" id="model-input" list="model-list"
+                       value="{{ status.pinned_model or '' }}" placeholder="например {{ status.model or 'grok-4.5' }}">
+            </label>
+            <datalist id="model-list"></datalist>
+            <div class="inline-form">
+                <button class="btn btn-ghost btn-sm" type="button" id="load-models">📋 Показать модели провайдера</button>
+                <span class="cta-hint" id="models-status">список приходит от самого вендора — так имена не устаревают</span>
+            </div>
+        </div>
+
+        <div class="next-stage-cta">
+            <button class="btn btn-primary" type="submit">Сохранить и переключить</button>
+            <button class="btn btn-ghost btn-sm" type="submit" name="action" value="reset">Сбросить к .env</button>
+            <span class="cta-hint">выбор хранится в <code>{{ status.settings_path }}</code>, ключи API там не сохраняются</span>
+        </div>
+    </form>
+
+    <details class="raw-toggle">
+        <summary>Как это устроено и где брать ключи</summary>
+        <div class="raw-body agent-bubble-text">
+            <p>Почти все вендоры говорят на одном протоколе — OpenAI Chat Completions. Поэтому в коде такой провайдер описывается пятью строками (базовый URL, переменная ключа, модель), а сетевой слой, разбор ошибок и каскад моделей — общие. Свой протокол требуют только Gemini и Anthropic — для них написаны отдельные адаптеры.</p>
+            <p>Ключи всегда лежат в <code>.env</code> в корне проекта и никогда — в этом файле настроек и не показываются в интерфейсе. Список нужных переменных — в <code>.env.example</code>. Можно держать ключи <b>сразу нескольких</b> вендоров и переключаться здесь одним щелчком: это спасает, когда у одного кончилась квота.</p>
+            <p>Вариант «Свой сервер» — для локальных моделей (Ollama, LM Studio, vLLM) или прокси: укажите <code>LLM_BASE_URL</code> и модель. Ключ там обычно не нужен.</p>
+        </div>
+    </details>
+</section>
+
+<script>
+(function () {
+    // Подсветка выбранной карточки провайдера + подсказка модели по умолчанию.
+    var form = document.getElementById("provider-form");
+    var modelInput = document.getElementById("model-input");
+    var radios = form.querySelectorAll('input[name="provider"]');
+
+    function syncActive() {
+        form.querySelectorAll(".llm-option").forEach(function (opt) {
+            var radio = opt.querySelector('input[name="provider"]');
+            opt.classList.toggle("llm-active", radio.checked);
+        });
+        var checked = form.querySelector('input[name="provider"]:checked');
+        if (checked) {
+            var def = checked.getAttribute("data-default-model");
+            modelInput.placeholder = def ? ("например " + def) : "укажите модель";
+        }
+        // Модели у вендоров называются по-разному — старый список неприменим.
+        document.getElementById("model-list").innerHTML = "";
+    }
+    radios.forEach(function (r) { r.addEventListener("change", syncActive); });
+    syncActive();
+
+    // Живой список моделей выбранного провайдера.
+    var loadBtn = document.getElementById("load-models");
+    var statusEl = document.getElementById("models-status");
+    loadBtn.addEventListener("click", function () {
+        var checked = form.querySelector('input[name="provider"]:checked');
+        if (!checked) return;
+        loadBtn.disabled = true;
+        statusEl.textContent = "Спрашиваем у провайдера…";
+        fetch("{{ url_for('llm_settings_models') }}?provider=" + encodeURIComponent(checked.value))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                loadBtn.disabled = false;
+                if (!data.ok) { statusEl.textContent = "Не получилось: " + data.error; return; }
+                var list = document.getElementById("model-list");
+                list.innerHTML = "";
+                data.models.forEach(function (m) {
+                    var o = document.createElement("option");
+                    o.value = m;
+                    list.appendChild(o);
+                });
+                statusEl.textContent = "Моделей: " + data.count + " — начните печатать в поле выше, появятся подсказки.";
+            })
+            .catch(function (e) {
+                loadBtn.disabled = false;
+                statusEl.textContent = "Ошибка запроса: " + e;
+            });
+    });
+
+    // Проверка связи — это реальный вызов модели, он не мгновенный.
+    var testForm = document.querySelector('form[action$="/test"]');
+    if (testForm) {
+        testForm.addEventListener("submit", function () {
+            var btn = document.getElementById("test-btn");
+            btn.disabled = true;
+            btn.textContent = "Спрашиваем модель…";
+        });
+    }
+})();
+</script>
+{% endblock %}

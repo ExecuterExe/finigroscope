@@ -12,7 +12,7 @@ import re
 import sys
 
 sys.path.insert(0, ".")
-os.environ["LLM_PROVIDER"] = "mock"
+os.environ["LLM_PROVIDER_FORCE"] = "mock"
 
 from review.llm_provider import LLMProvider, register  # noqa: E402
 

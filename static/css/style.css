@@ -471,6 +471,42 @@ a { color: var(--accent-soft); text-decoration: none; }
 .st-warn .map-tag { color: #ffd47a; }
 .st-miss .map-tag { color: #ff9a9a; }
 
+/* absent — «механики в игре нет»: не дефект, а установленный факт, поэтому
+   визуально приглушено и без тревожного цвета (в отличие от st-miss) */
+.map-node.st-absent { opacity: 0.72; }
+.st-absent .map-tag { color: var(--text-dim); }
+/* --- отчёт о балансе (Finding_balance) ------------------------------------- */
+.score-big { font-size: 1.5rem; font-weight: 800; }
+.score-max { font-size: 0.8rem; font-weight: 600; color: var(--text-dim); }
+.bd-row { grid-template-columns: 0.6fr 1fr 1fr 1.4fr; }
+.bd-bad { color: #ff9a9a; font-weight: 700; }
+.json-input { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
+.sev-critical { background: rgba(255,111,111,0.16); border-color: rgba(255,111,111,0.45); color: #ff9a9a; }
+.sev-major { background: rgba(255,196,80,0.14); border-color: rgba(255,196,80,0.42); color: #ffd47a; }
+.sev-minor { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+
+/* классификация исходов действий (diagnostic_meta.actions_resolution).
+   subjective_judgment выделен намеренно: такие действия кодом не моделируются
+   по существу, и от их наличия зависит решение о живом плейтесте */
+.res-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
+.res-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding: 8px 12px; border-radius: 9px; background: rgba(0,0,0,0.14);
+    border-left: 3px solid var(--card-border);
+}
+.res-row code { font-size: 0.86rem; }
+.res-kind { font-size: 0.82rem; color: var(--text-dim); }
+.res-row.res-det { border-left-color: rgba(90,220,150,0.45); }
+.res-row.res-prob { border-left-color: rgba(77,159,255,0.5); }
+.res-row.res-subj { border-left-color: rgba(255,196,80,0.65); background: rgba(255,196,80,0.06); }
+.res-row.res-subj .res-kind { color: #ffd47a; }
+
+.map-absent {
+    display: flex; align-items: baseline; gap: 10px; margin-top: 12px;
+    padding: 10px 13px; border-radius: 10px; background: rgba(0,0,0,0.14);
+    color: var(--text-dim); font-size: 0.87rem; line-height: 1.6;
+}
+
 /* вопросы автору */
 .qa-list { list-style: none; margin: 0; padding: 0; counter-reset: qa; display: flex; flex-direction: column; gap: 10px; }
 .qa-item {
@@ -552,6 +588,80 @@ a { color: var(--accent-soft); text-decoration: none; }
 .mirror-textarea { resize: vertical; min-height: 130px; font-family: inherit; }
 .mirror-form-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .mirror-form-hint { color: var(--text-dim); font-size: 0.85rem; }
+
+/* предел раундов уточнений */
+.round-note {
+    margin: 4px 0 18px; padding: 11px 15px; border-radius: 11px; font-size: 0.9rem;
+    color: var(--text-dim); background: rgba(255,255,255,0.03); border: 1px solid var(--card-border);
+}
+.round-note b { color: var(--text); }
+
+/* ---------- game_spec (извлеченец) ---------- */
+.spec-screen { max-width: 860px; margin: 0 auto; padding: clamp(28px, 5vw, 52px) clamp(20px, 5vw, 64px) 70px; }
+.spec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.spec-item {
+    display: flex; flex-direction: column; gap: 3px; padding: 10px 13px;
+    border-radius: 10px; background: rgba(0,0,0,0.14); border: 1px solid var(--card-border);
+}
+.spec-k { font-size: 0.76rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; }
+.spec-v { font-weight: 600; font-size: 0.95rem; }
+.v-null { color: var(--text-dim); font-style: italic; font-weight: 400; }
+.spec-line { margin: 8px 0; line-height: 1.55; font-size: 0.94rem; }
+.chip-mini {
+    display: inline-block; margin: 2px 5px 2px 0; padding: 2px 9px; border-radius: 999px;
+    font-size: 0.8rem; background: rgba(77,159,255,0.12); border: 1px solid rgba(77,159,255,0.3);
+    color: var(--accent-soft);
+}
+
+/* таблица компонентов */
+.comp-table { display: flex; flex-direction: column; gap: 6px; }
+.comp-row {
+    display: grid; grid-template-columns: 1.2fr 0.5fr 2fr; gap: 12px; align-items: start;
+    padding: 10px 13px; border-radius: 10px; background: rgba(0,0,0,0.12);
+    border: 1px solid var(--card-border); font-size: 0.9rem;
+}
+.comp-head {
+    background: transparent; border: none; padding: 0 13px; font-size: 0.75rem;
+    color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px;
+}
+.comp-name { font-weight: 600; }
+.comp-qty { color: var(--accent-soft); }
+.comp-fn { color: var(--text-dim); line-height: 1.5; }
+
+/* пробелы и неоднозначности */
+.gap-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.gap-item { padding: 12px 14px; border-radius: 11px; background: rgba(0,0,0,0.14); border: 1px solid var(--card-border); }
+.gap-critical { border-color: rgba(255,196,80,0.45); background: rgba(255,196,80,0.06); }
+.gap-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.gap-head code { background: rgba(255,255,255,0.08); padding: 2px 8px; border-radius: 6px; font-size: 0.85rem; }
+.gap-badge { background: rgba(255,196,80,0.16); color: #ffd47a; border: 1px solid rgba(255,196,80,0.4); }
+.gap-missing { line-height: 1.5; }
+
+/* текстовое описание структуры (что увидит автор перед приёмкой) */
+.spec-lead { font-weight: 600; color: var(--accent-soft); margin-bottom: 14px; }
+.desc-block { margin-bottom: 14px; }
+.desc-title {
+    font-size: 0.78rem; font-weight: 700; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+}
+.desc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.desc-list li { line-height: 1.55; font-size: 0.94rem; padding-left: 16px; position: relative; }
+.desc-list li::before { content: "•"; position: absolute; left: 3px; color: var(--accent); }
+.desc-hint { margin: 4px 0 0; color: var(--text-dim); font-size: 0.86rem; }
+
+/* приёмка структуры автором */
+.accept-card { border-color: rgba(90,220,150,0.3); }
+.accept-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.accept-actions form { margin: 0; }
+.revise-form {
+    display: flex; flex-direction: column; gap: 14px; margin-top: 16px;
+    padding-top: 16px; border-top: 1px solid var(--card-border);
+}
+
+@media (max-width: 640px) {
+    .comp-row { grid-template-columns: 1fr; gap: 4px; }
+    .comp-head { display: none; }
+}
 
 /* ---------- constructor ---------- */
 .constructor { max-width: 1240px; margin: 0 auto; padding: clamp(28px, 4vw, 48px) clamp(18px, 4vw, 56px) 80px; }
@@ -666,6 +776,37 @@ a { color: var(--accent-soft); text-decoration: none; }
     color: #cfe4ff; white-space: pre; font-family: "SFMono-Regular", Consolas, monospace;
 }
 .json-preview.collapsed { display: none; }
+
+/* блок сгенерированного кода скелета (game_skeleton.py) — тот же моноширинный
+   вид, что и json-preview, но выше и с горизонтальной прокруткой для длинных строк */
+.code-block {
+    margin: 12px 0 0; max-height: 620px; overflow: auto; font-size: 0.8rem; line-height: 1.5;
+    background: rgba(0,0,0,0.32); border: 1px solid var(--card-border); border-radius: 10px; padding: 14px 16px;
+    color: #cfe4ff; white-space: pre; font-family: "SFMono-Regular", Consolas, monospace;
+    -moz-tab-size: 4; tab-size: 4;
+}
+.code-block code { font: inherit; color: inherit; background: none; padding: 0; }
+
+/* --- страница выбора LLM-провайдера ---------------------------------------- */
+.nav-llm { font-size: 0.86rem; }
+.llm-list { display: flex; flex-direction: column; gap: 8px; }
+.llm-option {
+    display: flex; gap: 12px; align-items: flex-start; cursor: pointer;
+    padding: 12px 14px; border-radius: 11px; background: rgba(0,0,0,0.14);
+    border: 1px solid var(--card-border); transition: border-color .15s, background .15s;
+}
+.llm-option:hover { border-color: rgba(77,159,255,0.45); }
+.llm-option.llm-active { background: rgba(77,159,255,0.1); border-color: rgba(77,159,255,0.55); }
+.llm-option input { margin-top: 4px; flex: none; }
+.llm-body { display: flex; flex-direction: column; gap: 5px; }
+.llm-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.llm-id { font-size: 0.76rem; color: var(--text-dim); }
+.llm-note { font-size: 0.87rem; color: var(--text-dim); line-height: 1.45; }
+.llm-meta { font-size: 0.8rem; color: var(--text-dim); }
+.llm-badge-ok { background: rgba(120,230,180,0.14); border-color: rgba(120,230,180,0.4); color: #9fe9c2; }
+.inline-form { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.st-ok-text { color: #9fe9c2; }
+.st-miss-text { color: var(--text-dim); }
 .side-actions { display: flex; flex-direction: column; gap: 10px; }
 .btn-block { width: 100%; }
 .save-status { text-align: center; font-weight: 600; font-size: 0.9rem; color: var(--text-dim); min-height: 1.1em; }

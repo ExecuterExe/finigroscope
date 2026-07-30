@@ -3,25 +3,26 @@
  СКЕЛЕТ-СИМУЛЯТОР НАСТОЛЬНОЙ ИГРЫ  (проверка технического костяка)
 ==============================================================================
  Прогоняет игровой ЦИКЛ много раз и собирает статистику (винрейт по местам,
- достижимость победы, длительность, частоту действий, разброс финансов).
+ достижимость победы, длительность, частоту действий, разброс финансов,
+ а также статистическую значимость и размер эффекта по ключевым метрикам).
  Это проверка СКЕЛЕТА, а не содержания: графику/арт/поле модель не оценивает.
 
  Запуск: вставьте файл целиком на https://www.online-python.com/ и нажмите Run.
- Зависимостей нет — только стандартная библиотека.
+ Зависимостей нет - только стандартная библиотека.
 
  ПРАВИЛА ПРАВКИ:
    - Блок «ДВИЖОК» НЕ ТРОГАТЬ - он гоняет цикл, считает статистику и держит
      предохранитель от бесконечной партии.
    - Блок «СКЕЛЕТ» - заполнить под игру, НЕ меняя имена/сигнатуры функций.
-     Игровые данные храните в state.extra[...] (НЕ добавляйте поля в dataclass).
+     Можно добавлять поля в GameState и свои хелперы.
    - Блок «ПРИМЕР» - заменить на свою игру.
    - Непредсказуемое/субъективное моделируется СЛУЧАЙНОЙ величиной
      (см. действие "invest"). Каждое упрощение помечать  # ДОПУЩЕНИЕ: ...
 
  !!! ASCII В КОДЕ !!! Вне комментариев - только ASCII. Прямые кавычки " ' (не
-     ёлочки), стрелка -> (не ->), дефис - , многоточие ... . Имена и ключи -
-     латиницей. Иначе Python даёт синтаксическую ошибку. Без match/case и без
-     аннотаций вида int | None.
+     ёлочки), дефис - , многоточие ... . Имена и ключи - латиницей. Иначе
+     Python даёт синтаксическую ошибку. Без match/case и без аннотаций вида
+     int | None.
 ==============================================================================
 """
 
@@ -29,6 +30,7 @@ import random
 import statistics
 import json
 from dataclasses import dataclass, field
+import math
 
 # ============================================================================
 # КОНФИГУРАЦИЯ  (заменить под свою игру)
@@ -245,6 +247,64 @@ def _stats(xs):
     }
 
 
+# --- Вспомогательные функции для статистических тестов (чистый stdlib) ---
+def _normal_cdf(z):
+    return 0.5 * (1 + math.erf(z / math.sqrt(2)))
+
+
+def _chi2_pvalue(chi2_stat, df):
+    # Аппроксимация Уилсона-Хилферти: переводит хи-квадрат в стандартную нормаль
+    if df <= 0 or chi2_stat < 0:
+        return 1.0
+    x = chi2_stat / df
+    z = (x ** (1 / 3) - (1 - 2 / (9 * df))) / math.sqrt(2 / (9 * df))
+    return round(1 - _normal_cdf(z), 4)
+
+
+def _chi_square_gof(observed, expected):
+    chi2 = sum((o - e) ** 2 / e for o, e in zip(observed, expected) if e > 0)
+    df = len(observed) - 1
+    return chi2, _chi2_pvalue(chi2, df), df
+
+
+def _wilson_ci(count, n, z=1.96):
+    if n == 0:
+        return {"lower": 0.0, "upper": 0.0}
+    phat = count / n
+    denom = 1 + z ** 2 / n
+    center = phat + z ** 2 / (2 * n)
+    margin = z * math.sqrt(phat * (1 - phat) / n + z ** 2 / (4 * n ** 2))
+    return {"lower": round(max(0.0, (center - margin) / denom), 4),
+            "upper": round(min(1.0, (center + margin) / denom), 4)}
+
+
+def _cramers_v(chi2_stat, n, k):
+    if n == 0 or k <= 1:
+        return 0.0
+    return round(math.sqrt(chi2_stat / (n * (k - 1))), 4)
+
+
+def _gini(values):
+    vals = sorted(values)
+    n = len(vals)
+    if n == 0 or sum(vals) == 0:
+        return 0.0
+    cumulative = sum((i + 1) * v for i, v in enumerate(vals))
+    return round((2 * cumulative) / (n * sum(vals)) - (n + 1) / n, 4)
+
+
+def _skewness(xs):
+    n = len(xs)
+    if n < 3:
+        return 0.0
+    mean = statistics.mean(xs)
+    sd = statistics.pstdev(xs)
+    if sd == 0:
+        return 0.0
+    m3 = sum((x - mean) ** 3 for x in xs) / n
+    return round(m3 / (sd ** 3), 4)
+
+
 def aggregate(results, num_players):
     n = len(results)
     wins = {s: 0 for s in range(num_players)}
@@ -253,6 +313,7 @@ def aggregate(results, num_players):
     rounds, actions = [], []
     final_by_seat = {s: [] for s in range(num_players)}
     total_eliminated = 0
+    games_with_elim = 0
 
     for r in results:
         w = r["winner"]
@@ -268,20 +329,64 @@ def aggregate(results, num_players):
         for s, v in r["final_scores"].items():
             final_by_seat[int(s)].append(v)
         total_eliminated += len(r["eliminated"])
+        if r["eliminated"]:
+            games_with_elim += 1
 
     total_act = sum(action_freq.values()) or 1
+    rounds_stats = _stats(rounds)
+    final_stats_by_seat = {s: _stats(final_by_seat[s]) for s in range(num_players)}
+
+    total_wins = sum(wins.values())
+    if total_wins > 0:
+        seat_chi2, seat_p, seat_df = _chi_square_gof(
+            [wins[s] for s in range(num_players)],
+            [total_wins / num_players] * num_players)
+    else:
+        seat_chi2, seat_p, seat_df = 0.0, 1.0, num_players - 1
+    seat_fairness = {"chi2": round(seat_chi2, 3), "p_value": seat_p,
+                     "significant": seat_p < 0.05, "df": seat_df}
+    seat_fairness_effect = _cramers_v(seat_chi2, total_wins, num_players)
+    seat_ci = {s: _wilson_ci(wins[s], n) for s in range(num_players)}
+
+    duration_cv = round(rounds_stats["stdev"] / rounds_stats["mean"], 4) \
+        if rounds_stats["mean"] else 0.0
+    duration_skew = _skewness(rounds)
+
+    k_actions = len(action_freq) or 1
+    if action_freq:
+        action_chi2, action_p, action_df = _chi_square_gof(
+            list(action_freq.values()),
+            [total_act / k_actions] * k_actions)
+    else:
+        action_chi2, action_p, action_df = 0.0, 1.0, 0
+    action_dominance = {"chi2": round(action_chi2, 3), "p_value": action_p,
+                        "significant": action_p < 0.05, "df": action_df}
+    action_dominance_effect = _cramers_v(action_chi2, total_act, k_actions)
+
+    score_gini = _gini([final_stats_by_seat[s]["mean"] for s in range(num_players)])
+    elimination_rate = round(games_with_elim / n, 4)
+
     return {
         "games": n,
         "num_players": num_players,
         "win_rate_by_seat": {s: round(wins[s] / n, 4) for s in range(num_players)},
         "no_winner_rate": round(no_winner / n, 4),
         "end_reason_share": {k: round(v / n, 4) for k, v in reasons.items()},
-        "rounds": _stats(rounds),
+        "rounds": rounds_stats,
         "actions_per_game": _stats(actions),
         "action_share": {a: round(c / total_act, 4)
                          for a, c in sorted(action_freq.items(), key=lambda kv: -kv[1])},
-        "final_score_by_seat": {s: _stats(final_by_seat[s]) for s in range(num_players)},
+        "final_score_by_seat": final_stats_by_seat,
         "avg_eliminated_per_game": round(total_eliminated / n, 3),
+        "seat_fairness": seat_fairness,
+        "seat_fairness_effect": seat_fairness_effect,
+        "seat_ci": seat_ci,
+        "duration_cv": duration_cv,
+        "duration_skew": duration_skew,
+        "action_dominance": action_dominance,
+        "action_dominance_effect": action_dominance_effect,
+        "score_gini": score_gini,
+        "elimination_rate": elimination_rate,
     }
 
 
@@ -301,6 +406,15 @@ def print_report(all_stats):
               " (~0 => мёртвое; доминирование => дисбаланс)")
         print("Финальные очки по местам:       ", st["final_score_by_seat"])
         print("Среднее вылетов за партию:      ", st["avg_eliminated_per_game"])
+        print("Справедливость мест (хи-квадрат):     ", st["seat_fairness"],
+              "| эффект (V Крамера):", st["seat_fairness_effect"])
+        print("Доверительные интервалы по местам:     ", st["seat_ci"])
+        print("Вариация длительности (CV):            ", st["duration_cv"],
+              " | скошенность:", st["duration_skew"])
+        print("Доминирование действий (хи-квадрат):   ", st["action_dominance"],
+              "| эффект (V Крамера):", st["action_dominance_effect"])
+        print("Неравенство очков между местами (Gini):", st["score_gini"])
+        print("Доля партий хотя бы с одним вылетом:   ", st["elimination_rate"])
     print("\n" + "=" * 64)
     print("JSON ДЛЯ ОЦЕНКИ БАЛАНСА - скопируйте всё ниже и отправьте во вторую LLM-оценку:")
     print("=" * 64)

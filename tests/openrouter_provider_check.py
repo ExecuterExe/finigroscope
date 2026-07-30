@@ -58,9 +58,14 @@ print("\n2) успешный ответ: available=", resp.available, "| тек�
 assert resp.available and resp.text == "Привет, мир!"
 
 # --- 3) модель по умолчанию ---------------------------------------------------
+# Конкретное ИМЯ модели здесь намеренно не проверяется: бесплатный каталог
+# OpenRouter меняется каждые несколько месяцев, и такая проверка устаревала бы
+# вместе с ним (уже случалось). Проверяем инвариант: модель по умолчанию — это
+# первая ступень каскада, иначе первый же запрос уходил бы в другую модель.
 p2 = OpenRouterProvider(api_key="k")
 print("\n3) модель по умолчанию:", p2.model)
-assert p2.model == "meta-llama/llama-3.3-70b-instruct:free"
+assert p2.model == OpenRouterProvider.DEFAULT_MODEL
+assert OpenRouterProvider.FALLBACK_MODELS[0] == OpenRouterProvider.DEFAULT_MODEL
 
 # --- 4) ошибка API (модель недоступна) ---------------------------------------
 patch_post(lambda *a, **kw: FakeResp(400, text='{"error":{"message":"model not found"}}'))

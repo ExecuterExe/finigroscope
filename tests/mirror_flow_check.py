@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, ".")
 
-os.environ["LLM_PROVIDER"] = "mock"
+os.environ["LLM_PROVIDER_FORCE"] = "mock"
 
 from review.llm_provider import LLMProvider, register  # noqa: E402
 
@@ -102,7 +102,7 @@ with A.app.app_context():
     assert ms.ready_to_proceed is True
 
 # --- шаг 3: деградация без провайдера (null) -----------------------------
-os.environ["LLM_PROVIDER"] = "null"
+os.environ["LLM_PROVIDER_FORCE"] = "null"
 with open(essay, "rb") as f:
     r3 = c.post("/upload", data={"doc_type": "essay", "file": (f, "essay2.docx")},
                 content_type="multipart/form-data", follow_redirects=True)
@@ -117,7 +117,7 @@ with A.app.app_context():
     print("  DB phase остался pending:", ms3.phase == MirrorSession.PHASE_PENDING)
 
 # --- шаг 4: блокировка входа без can_simulate ----------------------------
-os.environ["LLM_PROVIDER"] = "mock"
+os.environ["LLM_PROVIDER_FORCE"] = "mock"
 sample_buf = build_sample()
 r4 = c.post("/upload", data={"doc_type": "essay", "file": (sample_buf, "weak.docx")},
             content_type="multipart/form-data", follow_redirects=True)

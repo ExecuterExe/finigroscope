@@ -50,6 +50,26 @@ def load_mirror_prompt() -> str:
     return _read(os.path.join(_PROMPTS_DIR, "mirror.md"))
 
 
+def load_extractor_prompt() -> str:
+    """Системный промпт агента «Извлеченец» (подтверждённый текст → game_spec)."""
+    return _read(os.path.join(_PROMPTS_DIR, "extractor.md"))
+
+
+def load_simulationist_prompt() -> str:
+    """Системный промпт агента «Симуляционист» (game_spec.core → заполненный скелет)."""
+    return _read(os.path.join(_PROMPTS_DIR, "simulationist.md"))
+
+
+def load_stats_evaluator_prompt() -> str:
+    """Системный промпт агента «Оценщик статистик» (STATS_JSON → Finding_balance)."""
+    return _read(os.path.join(_PROMPTS_DIR, "stats_evaluator.md"))
+
+
+def load_redesigner_prompt() -> str:
+    """Системный промпт агента «Авто-редизайнер» (недочёты → правка параметров)."""
+    return _read(os.path.join(_PROMPTS_DIR, "redesigner.md"))
+
+
 # --- сборка фактов этапов 1-2 в текст --------------------------------------
 def _format_stage1(stage1: dict) -> str:
     if not stage1:
