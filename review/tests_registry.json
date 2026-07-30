@@ -1,0 +1,702 @@
+[
+  {
+    "test": "1.1",
+    "category_no": 1,
+    "category": "Смерть и неиграбельный старт",
+    "name": "Тест смерти на первом ходу",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "1.2",
+    "category_no": 1,
+    "category": "Смерть и неиграбельный старт",
+    "name": "Тест гарантированного быстрого проигрыша при определенной раздаче",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": "seeded_deal",
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.initial_deal.random == true"
+    ]
+  },
+  {
+    "test": "1.3",
+    "category_no": 1,
+    "category": "Смерть и неиграбельный старт",
+    "name": "Тест на внезапную смерть от одного события",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "1.4",
+    "category_no": 1,
+    "category": "Смерть и неиграбельный старт",
+    "name": "Тест на беспомощность после выбывания",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "core.elimination == true"
+    ]
+  },
+  {
+    "test": "2.1",
+    "category_no": 2,
+    "category": "Недостижимость, софтлоки и бесконечные циклы",
+    "name": "Тест на софтлок",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "2.2",
+    "category_no": 2,
+    "category": "Недостижимость, софтлоки и бесконечные циклы",
+    "name": "Тест на полную блокировку",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "2.3",
+    "category_no": 2,
+    "category": "Недостижимость, софтлоки и бесконечные циклы",
+    "name": "Тест недостижимости победы",
+    "evidence_type": "STATS_REPORT",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "2.4",
+    "category_no": 2,
+    "category": "Недостижимость, софтлоки и бесконечные циклы",
+    "name": "Тест на бесконечные циклы без прогресса",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "2.5",
+    "category_no": 2,
+    "category": "Недостижимость, софтлоки и бесконечные циклы",
+    "name": "Тест понимания ничейных ситуаций",
+    "evidence_type": "CODE",
+    "evidence_note": "КОД плюс ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "2.6",
+    "category_no": 2,
+    "category": "Недостижимость, софтлоки и бесконечные циклы",
+    "name": "Тест на баланс путей к победе",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.win_paths.multiple == true"
+    ]
+  },
+  {
+    "test": "3.1",
+    "category_no": 3,
+    "category": "Предопределенность исхода",
+    "name": "Тест на необратимый отрыв",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "3.2",
+    "category_no": 3,
+    "category": "Предопределенность исхода",
+    "name": "Тест на спираль смерти",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostics.spiral_ratio != null"
+    ]
+  },
+  {
+    "test": "3.3",
+    "category_no": 3,
+    "category": "Предопределенность исхода",
+    "name": "Тест эффективности механики догоняния",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": "catchup_off",
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "core.catch_up.enabled == true"
+    ]
+  },
+  {
+    "test": "4.1",
+    "category_no": 4,
+    "category": "Экономическая устойчивость и баланс стратегий",
+    "name": "Тест на пассивного игрока",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (сплошная)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "4.2",
+    "category_no": 4,
+    "category": "Экономическая устойчивость и баланс стратегий",
+    "name": "Тест на агрессивного игрока",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (сплошная)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "4.3",
+    "category_no": 4,
+    "category": "Экономическая устойчивость и баланс стратегий",
+    "name": "Тест на стартовый дисбаланс",
+    "evidence_type": "STATS_REPORT",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "4.4",
+    "category_no": 4,
+    "category": "Экономическая устойчивость и баланс стратегий",
+    "name": "Тест на инфляцию/дефляцию",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "snapshot_resources непустой"
+    ]
+  },
+  {
+    "test": "4.5",
+    "category_no": 4,
+    "category": "Экономическая устойчивость и баланс стратегий",
+    "name": "Тест на окупаемость действий",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "snapshot_resources непустой"
+    ]
+  },
+  {
+    "test": "4.6",
+    "category_no": 4,
+    "category": "Экономическая устойчивость и баланс стратегий",
+    "name": "Тест чувствительности к дисперсии",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (сплошная)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "5.1",
+    "category_no": 5,
+    "category": "Темп, длительность и ожидание",
+    "name": "Тест на темп против лимита раундов",
+    "evidence_type": "STATS_REPORT",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "5.2",
+    "category_no": 5,
+    "category": "Темп, длительность и ожидание",
+    "name": "Тест на даунтайм (время ожидания между ходами)",
+    "evidence_type": "HYBRID",
+    "evidence_note": "ГИБРИД (внутри самого диагноста: число из симуляции, время из текста)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": [
+      "core.turn.order != одновременные ходы"
+    ]
+  },
+  {
+    "test": "5.3",
+    "category_no": 5,
+    "category": "Темп, длительность и ожидание",
+    "name": "Тест затянутости игры",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (использует те же данные, что и тест 1 категории 3, отдельного прогона не требует)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "5.4",
+    "category_no": 5,
+    "category": "Темп, длительность и ожидание",
+    "name": "Тест слишком быстрой игры",
+    "evidence_type": "STATS_REPORT",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "5.5",
+    "category_no": 5,
+    "category": "Темп, длительность и ожидание",
+    "name": "Тест на честность переговорных механик",
+    "evidence_type": "HYBRID",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК для формализованных сделок; ГИБРИД для свободных",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": [
+      "есть переговорные механики"
+    ]
+  },
+  {
+    "test": "6.1",
+    "category_no": 6,
+    "category": "Разрушительные и эксплуатирующие стратегии",
+    "name": "Тест на победную стратегию, независящую от соперников (мультиплеер-пасьянс)",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (смешанная), далее ГИБРИД для вердикта",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "lenses",
+    "applies_when": []
+  },
+  {
+    "test": "6.2",
+    "category_no": 6,
+    "category": "Разрушительные и эксплуатирующие стратегии",
+    "name": "Тест на читерскую петлю в рамках хода",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "exploit_search.search_exhausted == true"
+    ]
+  },
+  {
+    "test": "6.3",
+    "category_no": 6,
+    "category": "Разрушительные и эксплуатирующие стратегии",
+    "name": "Тест намеренного проигрыша ради выгоды",
+    "evidence_type": "CODE",
+    "evidence_note": "КОД; при наличии механизма – дополнительно СИМ + ПЕРСОНА",
+    "run_request": "persona_targeted",
+    "run_conditional": true,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "есть механизм переноса преимущества"
+    ]
+  },
+  {
+    "test": "7.1",
+    "category_no": 7,
+    "category": "Психологические и социальные ловушки",
+    "name": "Тест коалиции (влияние сговора на баланс)",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (смешанная), далее ГИБРИД для вердикта",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": [
+      "coalition_expressible == true"
+    ]
+  },
+  {
+    "test": "7.2",
+    "category_no": 7,
+    "category": "Психологические и социальные ловушки",
+    "name": "Тест на кингмейкинг",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (смешанная), далее ГИБРИД для вердикта",
+    "run_request": "persona_targeted",
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": [
+      "diagnostic_meta.targeted_actions.exists == true"
+    ]
+  },
+  {
+    "test": "7.3",
+    "category_no": 7,
+    "category": "Психологические и социальные ловушки",
+    "name": "Тест на квотербекинг",
+    "evidence_type": "TEXT",
+    "evidence_note": "ТЕКСТ (целиком уходит агенту линз, диагност не участвует)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": []
+  },
+  {
+    "test": "7.4",
+    "category_no": 7,
+    "category": "Психологические и социальные ловушки",
+    "name": "Тест конфликтогенности (механики прямого урона/унижения без защиты)",
+    "evidence_type": "CODE",
+    "evidence_note": "КОД",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "8.1",
+    "category_no": 8,
+    "category": "Обучающая ценность и доступность для новичков",
+    "name": "Тест нуба и профессионала",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (смешанная)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "8.2",
+    "category_no": 8,
+    "category": "Обучающая ценность и доступность для новичков",
+    "name": "Тест на анти-обучение (поощрение неправильного финансового поведения)",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА, далее ГИБРИД (вердикт выносят линзы)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": []
+  },
+  {
+    "test": "8.3",
+    "category_no": 8,
+    "category": "Обучающая ценность и доступность для новичков",
+    "name": "Тест ловушки для новичка",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (отдельного прогона не требует)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "9.1",
+    "category_no": 9,
+    "category": "Баланс артефактов (карт)",
+    "name": "Тест на «мусорные» карты",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ. Если карта в игре совпадает с действием один к одному, вместо card_winrate используется action_share, и тогда тип ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.hand_exists == true",
+      "card_coverage.sufficient == true"
+    ]
+  },
+  {
+    "test": "9.2",
+    "category_no": 9,
+    "category": "Баланс артефактов (карт)",
+    "name": "Тест на имба-карты",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (те же данные, что и в тесте 1 этой категории)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.hand_exists == true",
+      "card_coverage.sufficient == true"
+    ]
+  },
+  {
+    "test": "9.3",
+    "category_no": 9,
+    "category": "Баланс артефактов (карт)",
+    "name": "Тест комбинаторных взрывов",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.hand_exists == true",
+      "card_coverage.pair_sufficient == true"
+    ]
+  },
+  {
+    "test": "9.4",
+    "category_no": 9,
+    "category": "Баланс артефактов (карт)",
+    "name": "Тест на определяющую карту",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (те же данные, что и в тесте 1 этой категории)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.hand_exists == true",
+      "card_coverage.sufficient == true"
+    ]
+  },
+  {
+    "test": "10.1",
+    "category_no": 10,
+    "category": "Компонентная и физическая достаточность",
+    "name": "Тест нехватки компонентов",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (данные базового прогона, отдельного прогона не требует)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "text.components[].qty != null"
+    ]
+  },
+  {
+    "test": "10.2",
+    "category_no": 10,
+    "category": "Компонентная и физическая достаточность",
+    "name": "Тест нечитаемости состояний",
+    "evidence_type": "TEXT",
+    "evidence_note": "ТЕКСТ (уходит агенту линз)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": []
+  },
+  {
+    "test": "11.1",
+    "category_no": 11,
+    "category": "Реиграбельность и эмоциональная дуга",
+    "name": "Тест на эмоциональные пики",
+    "evidence_type": "HYBRID",
+    "evidence_note": "ГИБРИД (число считает диагност, вердикт выносят линзы)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "lenses",
+    "applies_when": []
+  },
+  {
+    "test": "11.2",
+    "category_no": 11,
+    "category": "Реиграбельность и эмоциональная дуга",
+    "name": "Тест повторяемости моментов",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "12.1",
+    "category_no": 12,
+    "category": "Масштабируемость и робастность по числу игроков",
+    "name": "Тест на минимальное число игроков",
+    "evidence_type": "STATS_REPORT",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "12.2",
+    "category_no": 12,
+    "category": "Масштабируемость и робастность по числу игроков",
+    "name": "Тест на максимальное число игроков",
+    "evidence_type": "STATS_REPORT",
+    "evidence_note": "ОТЧЕТ_СТАТИСТИК",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "12.3",
+    "category_no": 12,
+    "category": "Масштабируемость и робастность по числу игроков",
+    "name": "Тест на нестандартное число (если заявлено строго)",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (дополнительные конфигурации)",
+    "run_request": "extra_player_count",
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.strict_player_count.strict == true"
+    ]
+  },
+  {
+    "test": "12.4",
+    "category_no": 12,
+    "category": "Масштабируемость и робастность по числу игроков",
+    "name": "Тест на адаптивность сложности",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (сплошная)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.difficulty_modes.exists == true"
+    ]
+  },
+  {
+    "test": "13.1",
+    "category_no": 13,
+    "category": "Баланс контента и эталонная калибровка",
+    "name": "Тест на «эталонную карту»",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (переиспользует данные категории 9, отдельного прогона не требует)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.hand_exists == true",
+      "card_coverage.sufficient == true"
+    ]
+  },
+  {
+    "test": "13.2",
+    "category_no": 13,
+    "category": "Баланс контента и эталонная калибровка",
+    "name": "Тест на синергетические доминанты",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (данные теста 3 категории 9)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": false,
+    "verdict_by": "diagnost",
+    "applies_when": [
+      "diagnostic_meta.hand_exists == true",
+      "card_coverage.pair_sufficient == true"
+    ]
+  },
+  {
+    "test": "13.3",
+    "category_no": 13,
+    "category": "Баланс контента и эталонная калибровка",
+    "name": "Тест на вариативность стратегий",
+    "evidence_type": "SIM_PERSONA",
+    "evidence_note": "СИМ + ПЕРСОНА (агрегация)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  },
+  {
+    "test": "14.1",
+    "category_no": 14,
+    "category": "Прочие тесты",
+    "name": "Тест на индекс «удача/навык»",
+    "evidence_type": "SIM",
+    "evidence_note": "СИМ (агрегация, новых прогонов не требует)",
+    "run_request": null,
+    "run_conditional": false,
+    "persona_blind_na": true,
+    "verdict_by": "diagnost",
+    "applies_when": []
+  }
+]

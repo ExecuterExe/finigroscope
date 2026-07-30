@@ -275,6 +275,14 @@ class GameSkeleton(db.Model):
     reason = db.Column(db.Text, nullable=True)             # почему несимулируема
     missing_json = db.Column(db.Text, nullable=True)       # чего не хватило в core
     error = db.Column(db.Text, nullable=True)              # причина, если агент недоступен
+    # Метаданные v6 целиком: границы модели, которые читают следующие агенты
+    # (metric_responds_immediately, coalition_expressible, subjective_actions,
+    # fixed_length, content_scale, ignored_components, hooks_filled, pattern).
+    # Умолчание здесь = дезинформация следующего шага, поэтому храним как есть.
+    meta_json = db.Column(db.Text, nullable=True)
+    # Нарушения контракта, найденные самопроверкой (review/simulationist.validate).
+    # Все они БЕСШУМНЫ: код отрабатывает и выдаёт правдоподобные числа.
+    issues_json = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -296,6 +304,17 @@ class GameSkeleton(db.Model):
 
     def missing(self):
         return self._load(self.missing_json)
+
+    def meta(self):
+        import json
+        return json.loads(self.meta_json) if self.meta_json else {}
+
+    def issues(self):
+        return self._load(self.issues_json)
+
+    @property
+    def blocking_issues(self):
+        return [i for i in self.issues() if i.get("severity") == "error"]
 
     @property
     def is_ready(self) -> bool:
@@ -325,6 +344,11 @@ class BalanceReport(db.Model):
     game_index = db.Column(db.Integer, nullable=False, default=1)
     stats_json = db.Column(db.Text, nullable=True)     # STATS_JSON базового прогона
     stats_source = db.Column(db.String(16), nullable=True)
+    # DIAG_JSON — диагностический блок скелета v4 (runs[] + exploit_search).
+    # Его читает агент-диагност; «Оценщику статистик» он не подаётся вовсе,
+    # иначе на одну игру появятся два несогласованных вердикта.
+    # None у скелетов v3 — это не ошибка, а отсутствие данных.
+    diag_json = db.Column(db.Text, nullable=True)
     report_json = db.Column(db.Text, nullable=True)    # Finding_balance.json
     issues_json = db.Column(db.Text, nullable=True)    # нарушения самопроверки
     error = db.Column(db.Text, nullable=True)
@@ -340,6 +364,10 @@ class BalanceReport(db.Model):
     def stats(self):
         import json
         return json.loads(self.stats_json) if self.stats_json else None
+
+    def diag(self):
+        import json
+        return json.loads(self.diag_json) if self.diag_json else None
 
     def report(self):
         import json

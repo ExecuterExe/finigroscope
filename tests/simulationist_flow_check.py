@@ -56,13 +56,28 @@ class MockProvider(LLMProvider):
         if "инженер игровых симуляций" in system:
             calls["sim"] += 1
             if scenario["simulatable"]:
-                data = {"simulatable": True, "player_counts": [2, 3, 4],
+                # Формат v6: метаданные JSON (без code) + код ОТДЕЛЬНЫМ блоком.
+                meta = {"simulatable": True, "player_counts": [2, 3, 4],
+                        "pattern": "race", "manual_turn_order": False,
                         "assumptions": ["исход инвестиции смоделирован случайно"],
-                        "code": FILLED_CODE}
-            else:
-                data = {"simulatable": False,
-                        "reason": "в core нет условия победы — непонятно, когда партия выиграна",
-                        "missing": ["win_condition"]}
+                        "subjective_actions": ["invest"],
+                        "coalition_expressible": False,
+                        "coalition_note": "адресных действий нет",
+                        "metric_responds_immediately": True, "fixed_length": False,
+                        "end_reasons_used": ["goal_reached", "round_cap"],
+                        "content_scale": {}, "ignored_components": [],
+                        "hooks_filled": {"snapshot_metric": True, "snapshot_resources": True,
+                                         "hand_snapshot": False, "state_signature": True,
+                                         "clone_state": True, "win_path": True}}
+                return (json.dumps(meta, ensure_ascii=False)
+                        + "
+
+```python
+" + FILLED_CODE + "
+```")
+            data = {"simulatable": False,
+                    "reason": "в core нет условия победы — непонятно, когда партия выиграна",
+                    "missing": ["win_condition"]}
             return json.dumps(data, ensure_ascii=False)
 
         if "извлекатель структуры" in system:
@@ -115,6 +130,8 @@ checks["симуляционист прогнан"] = calls["sim"] == 1
 checks["бейдж симулируема"] = "Игра симулируема" in html
 checks["код показан"] = "заполнено симуляционистом" in html
 checks["допущение показано"] = "смоделирован случайно" in html
+checks["границы модели показаны"] = "Границы модели" in html
+checks["субъективное действие названо"] = "invest" in html
 checks["число игроков показано"] = ">2<" in html and ">4<" in html
 checks["нет статистик на экране"] = "win_rate_by_seat" not in html and "seat_fairness" not in html
 checks["есть кнопка скачать"] = "Скачать game_skeleton.py" in html

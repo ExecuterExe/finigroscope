@@ -251,8 +251,18 @@ class MockProvider(LLMProvider):
         if "аналитик игрового баланса" in system:
             return json.dumps(FINDING, ensure_ascii=False)
         if "инженер игровых симуляций" in system:
-            return json.dumps({"simulatable": True, "player_counts": [2, 4],
-                               "assumptions": [], "code": "print('sk')"}, ensure_ascii=False)
+            return (json.dumps({"simulatable": True, "player_counts": [2, 4],
+                                "pattern": "generic", "manual_turn_order": False,
+                                "assumptions": [], "subjective_actions": [],
+                                "coalition_expressible": False,
+                                "metric_responds_immediately": True,
+                                "fixed_length": False, "end_reasons_used": ["most_points"],
+                                "hooks_filled": {}}, ensure_ascii=False)
+                    + "
+
+```python
+print('sk')
+```")
         if "извлекатель структуры" in system:
             return json.dumps(SPEC, ensure_ascii=False)
         if "Ответов автора пока нет" in user:

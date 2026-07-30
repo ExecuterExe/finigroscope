@@ -2,6 +2,18 @@
 {% block title %}Скелет-симулятор — ФинИгроСкоп{% endblock %}
 
 {% block content %}
+{# тот же макрос, что и на странице структуры: пустое поле показываем явно —
+   «не указано» это сигнал, а не пустое место #}
+{% macro val(v) -%}
+    {%- if v is none or v == '' or v == [] -%}<span class="v-null">не указано</span>
+    {%- elif v is sameas true -%}да
+    {%- elif v is sameas false -%}нет
+    {%- elif v is string or v is number -%}{{ v }}
+    {%- elif v is mapping -%}{{ v.values() | select('defined') | map('string') | join(' · ') }}
+    {%- else -%}{{ v | join(', ') }}
+    {%- endif -%}
+{%- endmacro %}
+
 <section class="mirror-screen skeleton-screen">
     <div class="mirror-head">
         <a class="back-link" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">← к структуре игры</a>
@@ -40,6 +52,69 @@
             {% for a in sk.assumptions() %}<li class="open-item">{{ a }}</li>{% endfor %}
         </ul>
         <p class="desc-hint">То, чего не было в структуре игры, агент честно смоделировал случайной величиной и пометил допущением — а не выдал за факт.</p>
+    </div>
+    {% endif %}
+
+    {# --- границы модели (метаданные v6): их читают следующие агенты --- #}
+    {% set meta = sk.meta() %}
+    {% if meta %}
+    <div class="mcard">
+        <div class="mcard-title">🔭 Границы модели <span class="mcard-count">что симуляция умеет и чего не умеет</span></div>
+        <p class="dash-note">Эти пометки агент обязан заявить о себе сам. Умолчание здесь дезинформирует следующий шаг: например, если не сказать, что метрика не отзывается на ход немедленно, диагност прочтёт одинаковость персон как «игра устойчива к разным стилям», хотя правильный вывод — «про стили данных нет».</p>
+        <div class="spec-grid">
+            <div class="spec-item"><span class="spec-k">Типовая конструкция</span><span class="spec-v">{{ val(meta.get('pattern')) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Очередь ведёт скелет</span><span class="spec-v">{{ val(meta.get('manual_turn_order')) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Метрика откликается сразу</span><span class="spec-v">
+                {% if meta.get('metric_responds_immediately') is sameas false %}<span class="st-miss-text">нет — жадные персоны неинформативны</span>
+                {% else %}{{ val(meta.get('metric_responds_immediately')) }}{% endif %}
+            </span></div>
+            <div class="spec-item"><span class="spec-k">Сговор выразим</span><span class="spec-v">
+                {% if meta.get('coalition_expressible') is sameas false %}<span class="st-miss-text">нет{% if meta.get('coalition_note') %} — {{ meta['coalition_note'] }}{% endif %}</span>
+                {% else %}{{ val(meta.get('coalition_expressible')) }}{% endif %}
+            </span></div>
+            <div class="spec-item"><span class="spec-k">Длина партии фиксирована</span><span class="spec-v">{{ val(meta.get('fixed_length')) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Причины завершения</span><span class="spec-v">{{ val(meta.get('end_reasons_used')) }}</span></div>
+        </div>
+        {% if meta.get('subjective_actions') %}
+        <div class="spec-line"><b>Субъективные действия</b> (исход определяют игроки, симулятор моделирует случайно):
+            {% for a in meta['subjective_actions'] %}<span class="chip-mini">{{ a }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if meta.get('ignored_components') %}
+        <div class="spec-line"><b>Не моделируется:</b>
+            {% for c in meta['ignored_components'] %}<span class="chip-mini">{{ c }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if meta.get('content_scale') %}
+        <div class="spec-line"><b>Объём контента:</b>
+            {% for k, v in meta['content_scale'].items() %}<span class="chip-mini">{{ k }}: {{ v }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if meta.get('hooks_filled') %}
+        <div class="spec-line"><b>Хуки диагностики:</b>
+            {% for k, v in meta['hooks_filled'].items() %}
+            <span class="chip-mini">{{ '✅' if v else '➖' }} {{ k }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if sk.issues() %}
+    <div class="mcard {{ 'mcard-warn' if sk.blocking_issues else '' }}">
+        <div class="mcard-title">🧪 Самопроверка кода <span class="mcard-count">{{ sk.issues() | length }}</span></div>
+        <p class="dash-note">Все нарушения этого агента бесшумны: программа отрабатывает и выдаёт правдоподобные числа несуществующей игры. Поэтому код проверяется автоматически — блок ДВИЖОК сверяется с шаблоном побайтово, а значения <code>reason</code> и имена действий — с закрытыми словарями.</p>
+        <ul class="gap-list">
+            {% for i in sk.issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head">
+                    <code>{{ i.get('code') }}</code>
+                    {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
     </div>
     {% endif %}
 

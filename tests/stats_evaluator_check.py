@@ -225,9 +225,18 @@ class MockProvider(LLMProvider):
             return json.dumps(good, ensure_ascii=False)
 
         if "инженер игровых симуляций" in system:
-            return json.dumps({"simulatable": True, "player_counts": [3, 6],
-                               "assumptions": ["питч смоделирован случайно"],
-                               "code": "print('skeleton')"}, ensure_ascii=False)
+            return (json.dumps({"simulatable": True, "player_counts": [3, 6],
+                                "pattern": "generic", "manual_turn_order": False,
+                                "assumptions": ["питч смоделирован случайно"], "subjective_actions": ["pitch_product"],
+                                "coalition_expressible": False,
+                                "metric_responds_immediately": True,
+                                "fixed_length": False, "end_reasons_used": ["most_points"],
+                                "hooks_filled": {}}, ensure_ascii=False)
+                    + "
+
+```python
+print('sk')
+```")
 
         if "извлекатель структуры" in system:
             return json.dumps(SPEC, ensure_ascii=False)

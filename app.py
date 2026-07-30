@@ -801,26 +801,42 @@ def skeleton(doc_id, game_index):
 
     # Прогоняем агента только если ещё не было результата (или прошлый — сбой).
     if not sk.is_ready:
-        _run_simulation(gs, sk)
+        _run_simulation(gs, sk, document, game_index)
         db.session.commit()
 
     return render_template("skeleton.html", document=document, game_index=game_index, sk=sk)
 
 
-def _run_simulation(gs, sk):
-    """Прогон симуляциониста по ядру принятой структуры (game_spec.core)."""
-    spec = (gs.spec_dict() or {}).get("game_spec") or {}
+def _run_simulation(gs, sk, document=None, game_index=1):
+    """Прогон симуляциониста по принятой структуре.
+
+    С v6 агенту подаётся не только `core`, но и `diagnostic_meta` с каноническим
+    текстом: по сайдкару он решает, что класть в snapshot_metric, а что в
+    snapshot_resources, выразим ли сговор и нужен ли тай-брейк. Без сайдкара всё
+    это приходилось угадывать, и ошибка не проявлялась до самого отчёта.
+    """
+    root = gs.spec_dict() or {}
+    spec = root.get("game_spec") or {}
     core = spec.get("core") or {}
-    outcome = simulationist_agent.run(core)
+    canonical = None
+    if document is not None:
+        canonical = stage1.game_text_for_agent(
+            document.stored_path, document.doc_type, game_index)
+
+    outcome = simulationist_agent.run(core, diagnostic_meta=root.get("diagnostic_meta"),
+                                      canonical_text=canonical)
     if not outcome.get("available"):
         sk.error = outcome.get("error") or "Симуляционист недоступен."
         return
+    meta = outcome.get("meta") or {}
     sk.error = None
     sk.simulatable = bool(outcome.get("simulatable"))
+    sk.meta_json = json.dumps(meta, ensure_ascii=False)
+    sk.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
     if sk.simulatable:
         sk.code = outcome.get("code")
-        sk.player_counts_json = json.dumps(outcome.get("player_counts") or [], ensure_ascii=False)
-        sk.assumptions_json = json.dumps(outcome.get("assumptions") or [], ensure_ascii=False)
+        sk.player_counts_json = json.dumps(meta.get("player_counts") or [], ensure_ascii=False)
+        sk.assumptions_json = json.dumps(meta.get("assumptions") or [], ensure_ascii=False)
         sk.reason = None
         sk.missing_json = None
     else:
@@ -841,7 +857,7 @@ def skeleton_retry(doc_id, game_index):
     if sk is None:
         sk = GameSkeleton(document_id=doc_id, game_index=game_index)
         db.session.add(sk)
-    _run_simulation(gs, sk)
+    _run_simulation(gs, sk, document, game_index)
     db.session.commit()
     return redirect(url_for("skeleton", doc_id=doc_id, game_index=game_index))
 
@@ -871,7 +887,7 @@ def balance(doc_id, game_index):
         # фразы («исход питча смоделирован случайно»), и в списке действий им
         # не место, иначе автор видит предложение вместо идентификатора.
         soft=stats_agent.soft_actions((root or {}).get("diagnostic_meta"),
-                                      extractor_agent.subjective_actions(root)),
+                                      _subjective_actions(root, sk)),
     )
 
 
@@ -892,6 +908,7 @@ def balance_stats(doc_id, game_index):
             flash("Прогон скелета не удался — подробности на странице.", "error")
             return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
         stats, source = outcome["stats"], BalanceReport.SOURCE_LOCAL
+        diag = outcome.get("diag")
     else:
         raw = (request.form.get("stats") or "").strip()
         if not raw:
@@ -907,8 +924,13 @@ def balance_stats(doc_id, game_index):
                   "конфигураций с полями num_players и win_rate_by_seat.", "error")
             return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
         source = BalanceReport.SOURCE_PASTED
+        diag = None
 
     br.stats_json = json.dumps(stats, ensure_ascii=False)
+    # DIAG_JSON сохраняем отдельно: его читает агент-диагност, «Оценщику
+    # статистик» он не подаётся. None (вставка вручную) — это не пустота, а
+    # отсутствие данных, и дальше по конвейеру оно даёт честный n/a.
+    br.diag_json = json.dumps(diag, ensure_ascii=False) if diag else None
     br.stats_source = source
     br.error = None
     # Новая статистика — прежний вердикт по ней недействителен.
@@ -1096,6 +1118,19 @@ def _redesign_attempts(doc_id, game_index):
             .order_by(RedesignAttempt.attempt_number.asc()).all())
 
 
+def _subjective_actions(spec_root, sk=None):
+    """Действия с «мягкими» числами — объединение двух источников.
+
+    Извлеченец классифицирует действие как subjective_judgment по тексту, а
+    симуляционист (v6) заявляет, что реально смоделировал случайной величиной.
+    Источники могут разойтись, и объединение — безопасное направление: лишняя
+    осторожность даёт вердикт warn вместо problem, тогда как пропуск даёт
+    ложный флаг доминирующей стратегии по артефакту допущения.
+    """
+    declared = (sk.meta() or {}).get("subjective_actions") if sk is not None else None
+    return sorted(set(extractor_agent.subjective_actions(spec_root)) | set(declared or []))
+
+
 def _balance_context(doc_id, game_index):
     """Скелет и запись отчёта. Баланс оценивать не по чему, пока игра несимулируема."""
     sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=game_index).first()
@@ -1127,7 +1162,7 @@ def _run_stats_evaluation(doc_id, game_index, br):
         core, br.stats(),
         diagnostic_meta=root.get("diagnostic_meta"),
         assumptions=sk.assumptions() if sk else [],
-        subjective_actions=extractor_agent.subjective_actions(root),
+        subjective_actions=_subjective_actions(root, sk),
     )
     if outcome.get("available"):
         br.error = None

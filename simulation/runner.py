@@ -32,24 +32,32 @@ import subprocess
 import sys
 import tempfile
 
-DEFAULT_TIMEOUT = 120
-# Маркер, после которого движок печатает JSON. Держим синхронно с print_report.
-JSON_MARKER = "JSON ДЛЯ ОЦЕНКИ БАЛАНСА"
+DEFAULT_TIMEOUT = 300
+# Маркеры блоков в выводе скелета. Держим синхронно с print_report шаблона v4:
+# движок печатает СНАЧАЛА STATS_JSON (его читает «Оценщик статистик»), затем
+# DIAG_JSON (его читает агент-диагност).
+STATS_MARKER = "STATS_JSON"
+DIAG_MARKER = "DIAG_JSON"
+# Маркер шаблона v3 — на случай, если запускают старый скелет.
+LEGACY_MARKER = "JSON ДЛЯ ОЦЕНКИ БАЛАНСА"
 
 
 def extract_stats(stdout: str):
-    """Достаёт список конфигураций из вывода скелета.
+    """Достаёт STATS_JSON (список конфигураций) из вывода скелета.
 
-    Сначала пробуем то, что идёт после маркера, — это авторитетный блок. Если
-    маркер потерялся (модель могла тронуть print_report вопреки запрету), берём
-    последний JSON-массив в выводе.
+    Порядок важен: сначала отрезаем всё, что идёт после DIAG_JSON, иначе
+    «последний массив в выводе» окажется куском диагностики.
     """
     text = stdout or ""
-    tail = text.split(JSON_MARKER, 1)[1] if JSON_MARKER in text else text
+    head = text.split(DIAG_MARKER, 1)[0] if DIAG_MARKER in text else text
+    for marker in (STATS_MARKER, LEGACY_MARKER):
+        if marker in head:
+            head = head.split(marker, 1)[1]
+            break
 
     for candidate in (
-        re.search(r"(\[[\s\S]*\])\s*$", tail),
-        re.search(r"(\[[\s\S]*\])", tail),
+        re.search(r"(\[[\s\S]*\])\s*$", head),
+        re.search(r"(\[[\s\S]*\])", head),
         re.search(r"(\[[\s\S]*\])", text),
     ):
         if not candidate:
@@ -61,6 +69,28 @@ def extract_stats(stdout: str):
         if isinstance(data, list) and data and isinstance(data[0], dict):
             return data
     return None
+
+
+def extract_diag(stdout: str):
+    """Достаёт DIAG_JSON — диагностический блок для агента-диагноста.
+
+    Его нет у скелетов v3, и это НЕ ошибка: числовая ветка работает и без него,
+    просто тесты методички, которым он нужен, честно уйдут в n/a. Поэтому
+    отсутствие возвращается как None, а не как пустой словарь: пустой словарь
+    выглядел бы как «померили и ничего не нашли».
+    """
+    text = stdout or ""
+    if DIAG_MARKER not in text:
+        return None
+    tail = text.split(DIAG_MARKER, 1)[1]
+    match = re.search(r"(\{[\s\S]*\})", tail)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) and data.get("runs") is not None else None
 
 
 def looks_like_stats(data) -> bool:
@@ -121,4 +151,6 @@ def run_skeleton(code: str, timeout: int = DEFAULT_TIMEOUT) -> dict:
                     "error": "В выводе найден JSON, но он не похож на STATS_JSON базового прогона "
                              "(нет полей num_players / win_rate_by_seat).",
                     "stdout": stdout}
-        return {"ok": True, "stats": stats, "stdout": stdout}
+        # diag может быть None — у скелетов v3 его нет вовсе. Это не ошибка:
+        # числовая ветка работает, а тесты диагноста уйдут в честный n/a.
+        return {"ok": True, "stats": stats, "diag": extract_diag(stdout), "stdout": stdout}

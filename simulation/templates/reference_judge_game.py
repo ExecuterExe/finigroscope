@@ -26,12 +26,12 @@ from dataclasses import dataclass, field
 # КОНФИГУРАЦИЯ (заменить под свою игру)
 # ============================================================================
 GAMES_PER_CONFIG = 2000       # партий на конфигурацию числа игроков
-PLAYER_COUNTS = [2, 3, 4]     # min / типичное / max число игроков
+PLAYER_COUNTS = [3, 4, 5, 6]     # min / типичное / max число игроков
 MAX_ROUNDS = 200              # ПРЕДОХРАНИТЕЛЬ от бесконечной партии — НЕ удалять
 # True, если скелет САМ управляет очередью хода (фазовые игры: судья, одновременное
 # вскрытие, аукцион). Тогда движок не вызывает advance() и не трогает state.current,
 # а скелет обязан сам двигать current и увеличивать state.round.
-MANUAL_TURN_ORDER = False
+MANUAL_TURN_ORDER = True   # фазовая игра: очередью управляет скелет
 SEED = 42                     # фиксируем случайность ради повторяемости
 
 # --- План прогонов. Базовый прогон обязателен и всегда первый. -------------
@@ -55,22 +55,21 @@ EXPLOIT_MAX_NODES = 5000
 
 
 # ============================================================================
-# СОСТОЯНИЕ ИГРЫ (расширяйте игровые поля под свою игру)
+# СОСТОЯНИЕ ИГРЫ
 # ============================================================================
 @dataclass
 class GameState:
     num_players: int
     current: int = 0
     round: int = 1
-    phase: str = "main"
+    phase: str = "nominate"
     active: list = field(default_factory=list)
 
-    # --- игровые поля (ПРИМЕР; замените на свои сущности) ---
-    money: dict = field(default_factory=dict)
-    position: dict = field(default_factory=dict)
-    extra: dict = field(default_factory=dict)
+    # --- игровые поля ---
+    reputation: dict = field(default_factory=dict)   # метрика победы
+    extra: dict = field(default_factory=dict)        # hand / table / judge
 
-    # --- служебный учёт для статистики (НЕ трогать) ---
+    # --- служебный учёт (НЕ трогать) ---
     total_actions: int = 0
     action_counts: dict = field(default_factory=dict)
     per_seat_actions: dict = field(default_factory=dict)
@@ -78,150 +77,169 @@ class GameState:
 
 
 # ============================================================================
-# СКЕЛЕТ — ЗАПОЛНИТЬ ПОД СВОЮ ИГРУ (имена и сигнатуры не менять)
-# ПРИМЕР: «Денежная гонка» — трек 12 клеток, цель — позиция 24, деньги < 0 = вылет
+# СКЕЛЕТ — «Когнитивный детектив искажений»
+# Конструкция: СУДЬЯ ВЫБИРАЕТ ЛУЧШЕЕ (см. раздел «Типовые конструкции»)
 # ============================================================================
-GOAL = 24
-TRACK = 12
+HAND_SIZE = 6          # core: рука аналитика
+BIAS_DECK = 150        # core: карт искажений в колоде
+ROUNDS_PER_PLAYER = 1  # core: каждый игрок бывает детективом один раз
 
 
 def setup_game(num_players, rng, config):
-    """Стартовые условия. Обязан учитывать config: fixed_deal, disable_catchup."""
+    """core.setup: равный старт, случайная раздача руки."""
     st = GameState(num_players=num_players)
     st.active = list(range(num_players))
-    st.current = 0
+    st.phase = "nominate"
+    st.extra["judge"] = 0            # детектив первого раунда — место 0
+    st.extra["table"] = {}           # выложенные карты: seat -> card
+    st.extra["hand"] = {}
     fixed = (config or {}).get("fixed_deal")
+    deck = [f"bias_{i}" for i in range(BIAS_DECK)]
+    rng.shuffle(deck)
     for s in range(num_players):
-        st.money[s] = 10
-        st.position[s] = 0
+        st.reputation[s] = 0
         st.per_seat_actions[s] = 0
-        # ПРИМЕР карт на руке: нужны для тестов баланса артефактов
-        if fixed and s in fixed:
-            st.extra.setdefault("hand", {})[s] = list(fixed[s])
-        else:
-            st.extra.setdefault("hand", {})[s] = [
-                rng.choice(["bonus", "trap", "swap", "shield"]) for _ in range(2)
-            ]
+        st.extra["hand"][s] = list(fixed[s]) if fixed and s in fixed else [deck.pop() for _ in range(HAND_SIZE)]
+    st.extra["deck"] = deck
     st.extra["catchup_on"] = not (config or {}).get("disable_catchup", False)
+    # первым ходит первый аналитик, а не детектив
+    st.current = _next_analyst(st, start=st.extra["judge"])
     return st
 
 
+def _next_analyst(state, start):
+    """Следующее место, которое ещё не выложило карту и не является детективом."""
+    n = state.num_players
+    judge = state.extra["judge"]
+    for step in range(1, n + 1):
+        cand = (start + step) % n
+        if cand != judge and cand not in state.extra["table"]:
+            return cand
+    return judge
+
+
 def is_game_over(state):
-    if any(state.position.get(s, 0) >= GOAL for s in state.active):
-        return True
-    if len(state.active) <= 1:
-        return True
-    return False
+    """core.limits: партия длится num_players * ROUNDS_PER_PLAYER раундов."""
+    return state.round > state.num_players * ROUNDS_PER_PLAYER
 
 
 def get_legal_actions(state):
+    """ДВА имени действий на всю игру — параметр (карта) живёт в состоянии."""
     s = state.current
-    if s not in state.active:
-        return []
-    actions = ["move"]
-    if state.money[s] >= 3:
-        actions.append("invest")
-    return actions
+    if state.phase == "nominate":
+        return ["nominate_bias"] if state.extra["hand"].get(s) else []
+    if state.phase == "verdict":
+        return ["render_verdict"] if state.extra["table"] else []
+    return []
 
 
 def choose_action(state, legal_actions, rng):
-    """БАЗОВЫЙ выбор — ВСЕГДА случайный. Эталон для «Оценщика статистик»."""
+    """БАЗОВЫЙ выбор — всегда случайный (правило 11)."""
     return rng.choice(legal_actions)
 
 
 def apply_action(state, action, rng):
     s = state.current
-    if action == "move":
-        roll = rng.randint(1, 6)
-        state.position[s] += roll
-        tile = state.position[s] % TRACK
-        kind = tile % 3
-        if kind == 0:
-            state.money[s] += 2
-        elif kind == 1:
-            state.money[s] -= 1
+    if action == "nominate_bias":
+        hand = state.extra["hand"][s]
+        # ДОПУЩЕНИЕ: какую карту аналитик считает подходящей к делу — субъективно,
+        # моделируем равновероятным выбором из руки
+        card = rng.choice(hand)
+        hand.remove(card)
+        state.extra["table"][s] = card
+        # все аналитики выложились -> фаза вердикта
+        if len(state.extra["table"]) == len(state.active) - 1:
+            state.phase = "verdict"
+            state.current = state.extra["judge"]
         else:
-            event = rng.choice(["+3", "-2", "skip"])
-            if event == "+3":
-                state.money[s] += 3
-            elif event == "-2":
-                state.money[s] -= 2
-    elif action == "invest":
-        state.money[s] -= 3
-        # ДОПУЩЕНИЕ: исход инвестиции субъективен — моделируем случайной величиной
-        payoff = max(0, round(rng.gauss(4, 3)))
-        state.money[s] += payoff
-    # ПРИМЕР catch_up: отстающий получает поддержку, если механика включена
-    if state.extra.get("catchup_on") and state.position.get(s, 0) < state.round:
-        state.money[s] += 1
-    if state.money[s] < 0:
-        _eliminate(state, s)
+            state.current = _next_analyst(state, start=s)
+
+    elif action == "render_verdict":
+        # ДОПУЩЕНИЕ: убедительность версии оценивается субъективно —
+        # детектив выбирает равновероятно среди поданных карт
+        # (diagnostic_meta.actions_resolution: subjective_judgment)
+        winner = rng.choice(list(state.extra["table"].keys()))
+        state.reputation[winner] = state.reputation.get(winner, 0) + 1
+        _end_round(state, rng)
+
+
+def _end_round(state, rng):
+    """Сброс стола, добор руки, передача роли детектива, следующий раунд."""
+    deck = state.extra["deck"]
+    for s in range(state.num_players):
+        hand = state.extra["hand"][s]
+        while len(hand) < HAND_SIZE and deck:
+            hand.append(deck.pop())
+    state.extra["table"] = {}
+    state.extra["judge"] = (state.extra["judge"] + 1) % state.num_players
+    state.round += 1
+    state.phase = "nominate"
+    state.current = _next_analyst(state, start=state.extra["judge"])
 
 
 def determine_result(state):
-    goal_winners = sorted(
-        [s for s in state.active if state.position.get(s, 0) >= GOAL],
-        key=lambda s: -state.position[s],
-    )
-    if goal_winners:
-        winner, reason, path = goal_winners[0], "goal_reached", "race"
-    elif len(state.active) == 1:
-        winner, reason, path = state.active[0], "last_standing", "attrition"
-    elif len(state.active) == 0:
-        winner, reason, path = None, "all_eliminated", None
+    """reason — строго из закрытого словаря."""
+    scores = {s: state.reputation.get(s, 0) for s in range(state.num_players)}
+    best = max(scores.values()) if scores else 0
+    leaders = [s for s, v in scores.items() if v == best]
+    if len(leaders) == 1:
+        winner, reason = leaders[0], "most_points"
     else:
-        winner, reason, path = None, "round_cap", None
+        # diagnostic_meta.tie_breaker.present == false -> честная ничья,
+        # тай-брейк НЕ придумываем (правило 8)
+        winner, reason = None, "tie_unresolved"
     return {
         "winner": winner,
         "reason": reason,
-        "rounds": state.round,
+        "rounds": state.round - 1,
         "total_actions": state.total_actions,
         "eliminated": list(state.eliminated_order),
-        "final_scores": {s: state.money.get(s, 0) for s in range(state.num_players)},
+        "final_scores": scores,
         "action_counts": dict(state.action_counts),
         "per_seat_actions": dict(state.per_seat_actions),
-        "win_path": path,
+        "win_path": "most_reputation",   # путь один, но ярлык возвращаем всегда
     }
 
 
-# --- ХУКИ ДИАГНОСТИКИ (обязательны к заполнению) ---------------------------
+# --- ХУКИ ДИАГНОСТИКИ ---
 
 def snapshot_metric(state):
-    """Метрика ПОБЕДЫ по каждому месту (core.win_condition.metric)."""
-    return {s: state.position.get(s, 0) for s in range(state.num_players)}
+    """Метрика победы: накопленная репутация."""
+    return {s: state.reputation.get(s, 0) for s in range(state.num_players)}
 
 
 def snapshot_resources(state):
-    """Тратимые РЕСУРСЫ по каждому месту (core.resources). {} если ресурсов нет."""
-    return {s: state.money.get(s, 0) for s in range(state.num_players)}
+    """Тратимый ресурс: карты на руке (розыгрыш — расход, добор — приход)."""
+    return {s: len(state.extra["hand"].get(s, [])) for s in range(state.num_players)}
 
 
 def hand_snapshot(state):
-    """Карты/артефакты на руках. {} если карт в игре нет."""
     return {s: list(v) for s, v in state.extra.get("hand", {}).items()}
 
 
 def state_signature(state):
-    """Хешируемая подпись состояния — для поиска петель внутри хода."""
+    """Без служебных счётчиков (правило 17). Роль судьи входит в подпись."""
     return (
-        state.current,
-        state.phase,
-        tuple(sorted(state.position.items())),
-        tuple(sorted(state.money.items())),
-        tuple(sorted(state.active)),
+        state.current, state.phase, state.round, state.extra.get("judge"),
+        tuple(sorted(state.reputation.items())),
+        tuple(sorted((s, len(h)) for s, h in state.extra.get("hand", {}).items())),
+        tuple(sorted(state.extra.get("table", {}).items())),
     )
 
 
 def clone_state(state):
-    """Глубокая копия состояния для теневого просчёта."""
+    """Глубокая копия: каждый вложенный контейнер отдельно (правило 15)."""
     st = GameState(num_players=state.num_players)
     st.current, st.round, st.phase = state.current, state.round, state.phase
     st.active = list(state.active)
-    st.money = dict(state.money)
-    st.position = dict(state.position)
-    st.extra = {k: (dict(v) if isinstance(v, dict) else v) for k, v in state.extra.items()}
-    if "hand" in st.extra:
-        st.extra["hand"] = {k: list(v) for k, v in state.extra["hand"].items()}
+    st.reputation = dict(state.reputation)
+    st.extra = {
+        "judge": state.extra.get("judge"),
+        "catchup_on": state.extra.get("catchup_on", True),
+        "table": dict(state.extra.get("table", {})),
+        "deck": list(state.extra.get("deck", [])),
+        "hand": {k: list(v) for k, v in state.extra.get("hand", {}).items()},
+    }
     st.total_actions = state.total_actions
     st.action_counts = dict(state.action_counts)
     st.per_seat_actions = dict(state.per_seat_actions)
@@ -229,7 +247,7 @@ def clone_state(state):
     return st
 
 
-# --- ПЕРСОНЫ (сигнатура с config; базовый choose_action НЕ трогать) ---------
+# --- ПЕРСОНЫ ---
 
 def choose_action_passive(state, legal_actions, rng, config):
     return _greedy_pick(state, legal_actions, w_metric=0.0, w_resource=1.0)
@@ -248,8 +266,9 @@ def choose_action_expert(state, legal_actions, rng, config):
 
 
 def choose_action_coalition(state, legal_actions, rng, config):
-    # ДОПУЩЕНИЕ: в этой игре нет адресных действий на другого игрока —
-    # сговор не выразим механически, поведение совпадает с базовым.
+    # ДОПУЩЕНИЕ: подачи анонимны для детектива — он физически не может опознать
+    # карту напарника, поэтому сговор механически невыразим
+    # (coalition_expressible: false)
     return rng.choice(legal_actions)
 
 
