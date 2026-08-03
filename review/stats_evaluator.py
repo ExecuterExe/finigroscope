@@ -329,14 +329,20 @@ def validate(report: dict, stats: list = None, diagnostic_meta: dict = None,
             "covered_tests_missing",
             "Не заполнен covered_tests — диагност будет пересчитывать уже закрытое."))
 
-    # 8) конфигурации: проверки прогоняются по каждому числу игроков
-    stats_configs = [c.get("num_players") for c in (stats or []) if isinstance(c, dict)]
+    # 8) Конфигурации ПЕРЕСЧИТЫВАЮТСЯ по STATS_JSON, а не берутся из ответа:
+    # это перечень входных данных, а не суждение агента. Ответ модели идёт на
+    # сверку — расхождение значит, что она читала не все конфигурации, и знать
+    # об этом полезно, но в отчёт уходит фактический список.
+    stats_configs = sorted({c.get("num_players") for c in (stats or [])
+                            if isinstance(c, dict) and c.get("num_players") is not None})
     listed = report.get("configs_analyzed") or []
-    if stats_configs and sorted(x for x in listed if x is not None) != sorted(
-            x for x in stats_configs if x is not None):
+    if stats_configs and sorted(x for x in listed if x is not None) != stats_configs:
         issues.append(_issue(
-            "configs_mismatch",
-            f"configs_analyzed={listed}, а в STATS_JSON конфигурации {stats_configs}."))
+            "configs_recomputed",
+            f"configs_analyzed={listed}, а в STATS_JSON конфигурации {stats_configs}. "
+            "Взято посчитанное."))
+    if stats_configs:
+        report["configs_analyzed"] = stats_configs
 
     return report, issues
 

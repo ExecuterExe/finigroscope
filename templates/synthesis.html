@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% block title %}Итоговая оценка — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set result = sr.result() or {} %}
+{% set ref = sr.reference() or {} %}
+{% set total = ref.get('total') or {} %}
+{% set cov = ref.get('coverage') or {} %}
+{% set conf_ru = {'high': 'высокая', 'medium': 'средняя', 'low': 'низкая'} %}
+{% set na_ru = {
+    'no_data': 'данных не хватило',
+    'method_blind': 'метод неинформативен',
+    'search_incomplete': 'поиск неполон',
+    'budget_exceeded': 'превышен бюджет прогонов'
+} %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('diagnost', doc_id=document.id, game_index=game_index) }}">← к диагносту</a>
+        <h1>Итоговая оценка игры</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}{% if sr.attempt_number > 1 %} · итерация {{ sr.attempt_number }}{% endif %}</p>
+        <p class="mirror-intro">Последний шаг. Синтезатор ничего не оценивает заново — он сводит оценки числового анализа и диагноста в один балл, честно считает, какая доля проверки не выполнена, и пишет отчёт автору. Балл собирается по формуле, которую можно пересчитать вручную по таблице ниже.</p>
+    </div>
+
+    {% if sr.error %}
+    <div class="mirror-error">
+        <span>🛑 {{ sr.error }}</span>
+        <form method="post" action="{{ url_for('synthesis_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">Попробовать снова</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if not result and not sr.error %}
+    <div class="mirror-loading">Сводим оценки и считаем итоговый балл…</div>
+    {% endif %}
+
+    {% if result %}
+    {# --- балл и вердикт --- #}
+    <div class="mirror-badge {{ 'badge-open' if sr.revision_required else 'badge-ready' }}">
+        {% if sr.revision_required %}
+        ⚠️ Требуется ревизия: {{ sr.revision_reason | join('; ') }}
+        {% else %}
+        ✅ Игра проходит порог — обязательной ревизии не требуется.
+        {% endif %}
+    </div>
+
+    <div class="mcard">
+        <div class="mcard-title">🏁 Общий балл</div>
+        <div class="spec-grid">
+            <div class="spec-item">
+                <span class="spec-k">Итог</span>
+                <span class="spec-v score-big">{{ '%.2f' | format(sr.overall_score) if sr.overall_score is not none else '—' }} / 10</span>
+            </div>
+            <div class="spec-item">
+                <span class="spec-k">Надёжность оценки</span>
+                <span class="spec-v score-big">{{ conf_ru.get(sr.score_confidence, sr.score_confidence or '—') }}</span>
+            </div>
+            {% if history | length > 1 %}
+            <div class="spec-item">
+                <span class="spec-k">Было на прошлой итерации</span>
+                <span class="spec-v score-big">{{ '%.2f' | format(history[-2].overall_score) if history[-2].overall_score is not none else '—' }}</span>
+            </div>
+            {% endif %}
+        </div>
+        {% if result.get('summary') %}<div class="round-note">{{ result['summary'] }}</div>{% endif %}
+        {% if result.get('balance_score_preliminary') %}
+        <div class="round-note">⚠️ Балл баланса предварительный: статистика симуляции отсутствует, и числовая часть оценивалась по документу.</div>
+        {% endif %}
+    </div>
+
+    {# --- таблица категорий: балл обязан пересчитываться вручную --- #}
+    {% if total.get('rows') %}
+    <div class="mcard">
+        <div class="mcard-title">📊 Из чего сложился балл</div>
+        <p class="dash-note">Σ(балл × вес) ÷ Σ(весов). Категории, которые оценить было нечем, помечены N/A и <b>не входят ни в одну из двух сумм</b> — занижать балл за то, что не удалось проверить, нельзя.</p>
+        <div class="comp-table">
+            <div class="comp-row comp-head cat-row"><span>Категория</span><span>Балл</span><span>Вес</span><span>Вклад</span></div>
+            {% for row in total['rows'] %}
+            <div class="comp-row cat-row {{ 'cat-na' if row.get('na') }}">
+                <span class="comp-name">{{ row['category'] }}</span>
+                {% if row.get('na') %}
+                <span class="cat-na-note">не оценивалась (N/A) — исключена из обеих сумм</span>
+                {% else %}
+                <span><b>{{ '%.2f' | format(row['score']) }}</b></span>
+                <span>× {{ row['weight'] }}</span>
+                <span>{{ '%.3f' | format(row['product']) }}</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+            <div class="comp-row cat-row cat-total">
+                <span class="comp-name">Итого</span>
+                <span>{{ total.get('sum_weighted') }}</span>
+                <span>÷ {{ total.get('sum_weights') }}</span>
+                <span><b>{{ total.get('overall') }}</b></span>
+            </div>
+        </div>
+
+        {% set cat_scores = ref.get('category_scores') or {} %}
+        {% set lowered = cat_scores.items() | rejectattr('1.penalty', 'equalto', 0) | list %}
+        {% if lowered %}
+        <div class="spec-line"><b>Где балл снижен находками:</b></div>
+        <ul class="open-list">
+            {% for name, info in lowered %}
+            <li class="open-item">
+                <b>{{ name }}</b>: {{ '%.2f' | format(info['base']) }} → {{ '%.2f' | format(info['score']) }}
+                ({{ '%.2f' | format(info['penalty']) }}){% if info.get('capped_by_critical') %} <span class="qa-badge sev-critical">потолок 5 из-за критичной находки</span>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# --- надёжность: главное, что отличает честную оценку от красивой --- #}
+    <div class="mcard {{ 'mcard-warn' if cov.get('unmeasured') else '' }}">
+        <div class="mcard-title">🎯 Насколько этой оценке можно верить</div>
+        <div class="spec-grid">
+            <div class="spec-item"><span class="spec-k">Применимых тестов</span><span class="spec-v score-big">{{ cov.get('applicable', '—') }}</span></div>
+            <div class="spec-item"><span class="spec-k">Не выполнено</span><span class="spec-v score-big">{{ cov.get('unmeasured', 0) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Доля непроверенного</span><span class="spec-v score-big">{{ '%.0f%%' | format((cov.get('share') or 0) * 100) }}</span></div>
+        </div>
+        <p class="dash-note">Знаменатель — только <b>применимые</b> тесты. Механики, которой в игре нет, в счёт не идут: не проверять то, чего не существует, — не пробел.</p>
+        {% if cov.get('breakdown') %}
+        <div class="spec-line"><b>Почему не выполнено:</b>
+            {% for k, v in cov['breakdown'].items() %}<span class="chip-mini">{{ na_ru.get(k, k) }}: {{ v }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if cov.get('categories_unscored_share') %}
+        <div class="round-note">Не оценено категорий (по весу): <b>{{ '%.0f%%' | format(cov['categories_unscored_share'] * 100) }}</b>. Тесты диагноста могли пройти полностью, но балл, собранный по части категорий, надёжным называть нельзя — итоговая надёжность взята как худшая из двух: по тестам «{{ conf_ru.get(cov.get('tests_confidence'), '—') }}», по категориям «{{ conf_ru.get(cov.get('categories_confidence'), '—') }}».</div>
+        {% endif %}
+        {% if result.get('confidence_note') %}<div class="round-note">{{ result['confidence_note'] }}</div>{% endif %}
+    </div>
+
+    {# Находка по неоценённой категории снизить балл не может — но исчезнуть
+       не имеет права: в формуле её нет, и молчание выглядит как «всё чисто». #}
+    {% set outside = ref.get('penalties_outside_scored') or [] %}
+    {% if outside %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">❗ Найдено, но на балл не повлияло <span class="mcard-count">{{ outside | length }}</span></div>
+        <p class="dash-note">Эти находки относятся к категориям, которые в этом прогоне оценить было нечем — снижать оказалось нечего. Проблемы от этого не исчезли: балл их просто не отражает.</p>
+        <ul class="gap-list">
+            {% for p in outside %}
+            <li class="gap-item">
+                <div class="gap-head">
+                    <code>{{ p.get('test') or p.get('code') }}</code>
+                    {% if p.get('severity') %}<span class="qa-badge sev-{{ p['severity'] }}">{{ p['severity'] }}</span>{% endif %}
+                    <span class="chip-mini">{{ p.get('category') }}</span>
+                </div>
+                <div class="gap-missing">{{ p.get('detail') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# --- приоритеты автору --- #}
+    {% if result.get('top_priorities') %}
+    <div class="mcard">
+        <div class="mcard-title">📌 С чего начать <span class="mcard-count">{{ result['top_priorities'] | length }}</span></div>
+        <p class="dash-note">Только то, что измерено. Находки на «мягких» числах сюда не попадают: чинить механику по артефакту допущения симулятора бессмысленно.</p>
+        <ol class="open-list">
+            {% for p in result['top_priorities'] %}
+            <li class="open-item">
+                {% if p is mapping %}
+                <b>{{ p.get('what') or p.get('title') or '' }}</b>
+                {% if p.get('why') %}<div class="qa-why">Почему: {{ p['why'] }}</div>{% endif %}
+                {% if p.get('evidence') %}<div class="qa-why">Основание: {{ p['evidence'] }}</div>{% endif %}
+                {% else %}{{ p }}{% endif %}
+            </li>
+            {% endfor %}
+        </ol>
+    </div>
+    {% endif %}
+
+    {% if result.get('playtest_recommended') %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🎲 Рекомендован живой плейтест</div>
+        <div class="gap-missing">{{ result.get('playtest_reason') }}</div>
+    </div>
+    {% endif %}
+
+    {# --- полный отчёт автору --- #}
+    {% if result.get('report_md') %}
+    <div class="mcard">
+        <div class="mcard-title">📄 Отчёт автору</div>
+        <div class="agent-bubble-text raw-body">{{ result['report_md'] | markdown | safe }}</div>
+    </div>
+    {% endif %}
+
+    {% if sr.issues() %}
+    <div class="mcard {{ 'mcard-warn' if sr.blocking_issues else '' }}">
+        <div class="mcard-title">🧪 Самопроверка отчёта <span class="mcard-count">{{ sr.issues() | length }}</span></div>
+        <p class="dash-note">Балл и решение о ревизии считает код, а не модель: и то и другое — арифметика по правилам, а расхождение здесь стоит дороже всего. Ниже — где ответ агента разошёлся с расчётом.</p>
+        <ul class="gap-list">
+            {% for i in sr.issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head">
+                    <code>{{ i.get('code') }}</code>
+                    {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# --- что дальше: круг ремонта под счётчиком попыток --- #}
+    {% if route %}
+    <div class="mcard">
+        <div class="mcard-title">🔁 Что дальше</div>
+        {% if route.get('budget_exhausted') %}
+        <div class="round-note">Бюджет попыток авто-редизайна исчерпан ({{ max_attempts }} из {{ max_attempts }}), а ревизия всё ещё требуется. Отчёт выдаётся как есть — с перечнем того, что осталось незакрытым: часть проблем не чинится подстройкой чисел и требует решения автора.</div>
+        {% elif route.get('can_revise') %}
+        <div class="round-note">Осталось попыток авто-редизайна: <b>{{ route.get('attempts_left') }}</b> из {{ max_attempts }}. Правка предлагается вам — применять или нет, решаете вы; после применения игру нужно пересимулировать и оценка пересчитается.</div>
+        <div class="accept-actions">
+            <a class="btn btn-primary" href="{{ url_for('redesign', doc_id=document.id, game_index=game_index) }}">К авто-редизайну (режим B) →</a>
+        </div>
+        {% else %}
+        <div class="round-note">Обязательной ревизии нет — отчёт финальный.</div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if history | length > 1 %}
+    <div class="mcard">
+        <div class="mcard-title">📈 История итераций <span class="mcard-count">{{ history | length }}</span></div>
+        <ul class="open-list">
+            {% for h in history %}
+            <li class="open-item">
+                Итерация {{ h.attempt_number }} — балл
+                <b>{{ '%.2f' | format(h.overall_score) if h.overall_score is not none else '—' }}</b>,
+                надёжность {{ conf_ru.get(h.score_confidence, h.score_confidence or '—') }}{% if h.revision_required %}, ревизия требовалась{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="next-stage-cta">
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('synthesis_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать отчёт с расчётом (JSON)</a>
+        <form method="post" action="{{ url_for('synthesis_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">↻ Пересчитать</button>
+        </form>
+        <span class="cta-hint">пересчёт не тратит попытку авто-редизайна</span>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

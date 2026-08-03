@@ -155,8 +155,15 @@ checks["problem без флага пойман"] = "problem_without_flag" in cod
 _, issues = ev.validate(report_with(mode="cooperative"), STATS, META)
 checks["кооператив со счётом мест пойман"] = "coop_seat_fairness" in codes(issues)
 
-_, issues = ev.validate(report_with(configs_analyzed=[3]), STATS, META)
-checks["несовпадение конфигураций поймано"] = "configs_mismatch" in codes(issues)
+# Перечень конфигураций — это вход, а не суждение: он пересчитывается по
+# STATS_JSON, а ответ модели идёт на сверку.
+fixed, issues = ev.validate(report_with(configs_analyzed=[3]), STATS, META)
+checks["несовпадение конфигураций поймано"] = "configs_recomputed" in codes(issues)
+checks["конфигурации пересчитаны по STATS"] = fixed["configs_analyzed"] == sorted(
+    {c["num_players"] for c in STATS})
+_, clean = ev.validate(report_with(configs_analyzed=sorted(
+    {c["num_players"] for c in STATS})), STATS, META)
+checks["верный перечень замечаний не даёт"] = "configs_recomputed" not in codes(clean)
 
 _, issues = ev.validate(report_with(priority_fixes=[
     {"target": "сделать игру лучше", "direction": "", "closes": ""}]), STATS, META)
@@ -232,11 +239,7 @@ class MockProvider(LLMProvider):
                                 "metric_responds_immediately": True,
                                 "fixed_length": False, "end_reasons_used": ["most_points"],
                                 "hooks_filled": {}}, ensure_ascii=False)
-                    + "
-
-```python
-print('sk')
-```")
+                    + "\n\n```python\nprint('sk')\n```")
 
         if "извлекатель структуры" in system:
             return json.dumps(SPEC, ensure_ascii=False)
@@ -254,7 +257,7 @@ print('sk')
 register("mock", MockProvider)
 
 import app as A  # noqa: E402
-from models import BalanceReport  # noqa: E402
+from models import BalanceReport, db  # noqa: E402
 
 cl = A.app.test_client()
 essay = r"C:\Users\Eugene\Desktop\НСПК\Фин-игры\Фин-игры эссе - версия от 1 февраля.docx"
@@ -278,7 +281,7 @@ checks["предупреждение о запуске кода"] = "напис�
 # --- мусор вместо JSON отбивается -------------------------------------------
 bad_paste = cl.post(f"/documents/{doc_id}/balance/1/stats", data={"stats": "не json"},
                     follow_redirects=True).get_data(as_text=True)
-checks["не-JSON отбит"] = "не похоже на JSON" in bad_paste
+checks["не-JSON отбит"] = "не похоже ни на вывод скелета" in bad_paste
 wrong = cl.post(f"/documents/{doc_id}/balance/1/stats",
                 data={"stats": json.dumps([{"foo": 1}])},
                 follow_redirects=True).get_data(as_text=True)
@@ -325,6 +328,69 @@ checks["Finding_balance качается"] = dl.status_code == 200 and "tie_unre
 cl.post(f"/documents/{doc_id}/balance/1/stats",
         data={"stats": json.dumps(STATS[:1], ensure_ascii=False)}, follow_redirects=True)
 checks["новая статистика переоценена"] = calls["eval"] == 2
+
+# ============================================================================
+# ПРИЁМ ВСТАВКИ: весь вывод консоли, а не вырезанный кусок
+# ============================================================================
+# Скелет печатает ДВА блока. Просьба «скопируйте нужный» стабильно теряла
+# DIAG_JSON, а вместе с ним — половину доказательств для диагноста.
+from simulation import runner as R  # noqa: E402
+
+CONSOLE = (
+    "Гоняем 2000 партий...\n"
+    "STATS_JSON  (для «Оценщика статистик» — формат v3, не менять)\n"
+    + json.dumps(STATS, ensure_ascii=False) + "\n\n"
+    "DIAG_JSON  (для «Агента-диагноста»)\n"
+    + json.dumps({"runs": [{"run_id": "base", "diagnostics": {}}],
+                  "exploit_search": {}}, ensure_ascii=False) + "\n")
+
+p = R.parse_pasted_output(CONSOLE)
+checks["из вывода целиком взята статистика"] = len(p["stats"] or []) == len(STATS)
+checks["из вывода целиком взят DIAG"] = (p["diag"] or {}).get("runs") is not None
+checks["ошибок при полном выводе нет"] = p["error"] is None
+
+# Голый массив по-прежнему принимается: старая привычка не должна ломаться.
+p = R.parse_pasted_output(json.dumps(STATS, ensure_ascii=False))
+checks["голый массив принимается"] = len(p["stats"] or []) == len(STATS)
+checks["у голого массива DIAG нет"] = p["diag"] is None
+
+# Скопировали не тот блок — это надо сказать прямо, а не «это не JSON».
+p = R.parse_pasted_output(json.dumps({"runs": [], "exploit_search": {}}, ensure_ascii=False))
+checks["вставку одного DIAG узнаём"] = p["stats"] is None and "DIAG_JSON" in (p["error"] or "")
+p = R.parse_pasted_output("DIAG_JSON\n" + json.dumps({"runs": []}, ensure_ascii=False))
+checks["вывод без STATS отбивается понятно"] = "STATS_JSON" in (p["error"] or "")
+
+checks["пустая вставка отбита"] = R.parse_pasted_output("   ")["stats"] is None
+checks["мусор отбит"] = R.parse_pasted_output("привет")["stats"] is None
+checks["чужой JSON отбит"] = R.parse_pasted_output('[{"a": 1}]')["stats"] is None
+
+# --- через форму: DIAG доезжает до базы и до экрана ---------------------------
+cl.post(f"/documents/{doc_id}/balance/1/stats", data={"stats": CONSOLE},
+        follow_redirects=True)
+with A.app.app_context():
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=1).first()
+    checks["DIAG сохранён из вставки"] = bool(br.diag())
+    checks["статистика из вставки сохранена"] = len(br.stats() or []) == len(STATS)
+
+page = cl.get(f"/documents/{doc_id}/balance/1").get_data(as_text=True)
+checks["наличие DIAG показано автору"] = "DIAG_JSON есть" in page
+
+# Без DIAG автор обязан узнать об этом сразу, а не через экран.
+warned = cl.post(f"/documents/{doc_id}/balance/1/stats",
+                 data={"stats": json.dumps(STATS, ensure_ascii=False)},
+                 follow_redirects=True).get_data(as_text=True)
+checks["отсутствие DIAG предупреждается"] = "DIAG_JSON" in warned
+checks["отсутствие DIAG видно на экране"] = "DIAG_JSON нет" in warned
+
+# Инструкция на экране не должна звать искать маркер, которого больше нет.
+with A.app.app_context():
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=1).first()
+    br.stats_json = br.diag_json = br.report_json = None
+    db.session.commit()
+intake = cl.get(f"/documents/{doc_id}/balance/1").get_data(as_text=True)
+checks["устаревший маркер убран"] = R.LEGACY_MARKER not in intake
+checks["названы оба нужных блока"] = "STATS_JSON" in intake and "DIAG_JSON" in intake
+checks["локальный прогон на виду"] = "Прогнать скелет локально" in intake
 
 for label, ok in checks.items():
     print(("OK  " if ok else "FAIL") + " | " + label)

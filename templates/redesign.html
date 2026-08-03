@@ -18,14 +18,30 @@
         <div class="mcard-title">🔔 Нужен ли авто-редизайн</div>
         {% if trigger.trigger %}
         <p class="mcard-understanding">⚠️ Да — {{ trigger.reason }}.</p>
+        {% if trigger.mode == 'B_full_critique' %}
+        <p class="dash-note">Круг открыл не отдельный сломанный флаг, а итоговая оценка: игра может не иметь ни одной критичной поломки и всё равно не добирать проходного балла из-за накопленных мелких проблем. Режим B — правка по приоритетам финального отчёта.</p>
+        {% else %}
         <p class="dash-note">Правка запускается только по критичным находкам. Некритичные флаги структуру не трогают: над-коррекция хуже недо-коррекции.</p>
+        {% endif %}
         {% else %}
         <p class="mcard-understanding">✅ Нет — {{ trigger.reason }}.</p>
         <p class="dash-note">Агент не вызывается: менять параметры игры без критичной находки незачем.</p>
         {% endif %}
+        {% if sr and sr.result_json %}
         <div class="spec-line">
-            <b>Попыток использовано:</b> {{ used }} из {{ max_attempts }}.
+            <b>Итоговый балл:</b> {{ '%.2f' | format(sr.overall_score) if sr.overall_score is not none else '—' }} / 10 —
+            <a href="{{ url_for('synthesis', doc_id=document.id, game_index=game_index) }}">к итоговой оценке</a>
+        </div>
+        {% endif %}
+        {# Два бюджета показываем раздельно: «игра менялась трижды» и
+           «предложений подобрано достаточно» — разные причины остановки. #}
+        <div class="spec-line">
+            <b>Правок структуры принято:</b> {{ used }} из {{ max_attempts }}.
             {% if used >= max_attempts %}Лимит исчерпан — оставшиеся находки уйдут в рекомендации.{% endif %}
+        </div>
+        <div class="spec-line">
+            <b>Предложений подобрано:</b> {{ proposals }} из {{ max_proposals }}.
+            {% if proposals >= max_proposals %}Бюджет подбора исчерпан. Это <b>не</b> запрет на ремонт: агент уже {{ max_proposals }} раз искал правку для этой игры, и дальше дешевле разобраться самому — оставшиеся находки уйдут в рекомендации.{% endif %}
         </div>
     </div>
 
@@ -143,7 +159,7 @@
         <pre class="json-preview raw-body">{{ current.result_json }}</pre>
     </details>
 
-    {% elif trigger.trigger and used < max_attempts %}
+    {% elif trigger.trigger and used < max_attempts and proposals < max_proposals %}
     <div class="next-stage-cta">
         <form method="post" action="{{ url_for('redesign_propose', doc_id=document.id, game_index=game_index) }}" id="propose-form">
             <button class="btn btn-primary" type="submit" id="propose-btn">Предложить правку</button>

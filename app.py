@@ -32,15 +32,18 @@ from analysis import stage1
 from analysis.reference import DOC_TYPES
 from models import (
     BalanceReport,
+    DiagnosisReport,
     Document,
     GameSkeleton,
     GameSpec,
     MirrorSession,
     RedesignAttempt,
     Report,
+    SynthesisReport,
     User,
     db,
 )
+from review import diagnost as diagnost_agent
 from review import extractor as extractor_agent
 from review import llm_provider, llm_settings
 from review import mirror as mirror_agent
@@ -48,6 +51,7 @@ from review import redesigner as redesign_agent
 from review import simulationist as simulationist_agent
 from review import spec_describe
 from review import stats_evaluator as stats_agent
+from review import synthesizer as synth_agent
 from simulation import runner as sim_runner
 
 # Секреты (LLM_PROVIDER, GEMINI_API_KEY, ...) читаются из .env в корне проекта —
@@ -427,6 +431,43 @@ def mirror_reply(doc_id, game_index):
             ms.ready_to_proceed = True
     db.session.commit()
 
+    return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
+
+
+@app.route("/documents/<int:doc_id>/mirror/<int:game_index>/retry", methods=["POST"])
+@login_required
+def mirror_retry(doc_id, game_index):
+    """Прогнать последний проход заново — тот же раунд, бюджет не тратится.
+
+    Единственный экран конвейера, где сбой раньше не отыгрывался. Ответ агента
+    без машинного блока — не ошибка провайдера: вызов формально удачен, поэтому
+    `ms.error` пуст, вопросов в ответе нет, и оркестратор честно закрывает
+    сверку. Автор при этом остаётся без карты понимания и без заданных вопросов,
+    а вернуться ему потом неоткуда: форма ответа исчезла вместе с фазой.
+
+    Ответ автора сохраняется и подаётся снова — переспрашивать его повторно
+    было бы наказанием за сбой на нашей стороне.
+    """
+    document = _owned_document(doc_id)
+    ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if ms is None or ms.phase == MirrorSession.PHASE_PENDING:
+        flash("Сверка ещё не начиналась.", "error")
+        return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
+
+    game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
+    outcome = mirror_agent.run_pass(
+        game_text, prior_json=ms.last_json_dict(), author_answer=ms.author_answer,
+        round_no=ms.round, max_rounds=MirrorSession.MAX_ROUNDS)
+
+    data = outcome.get("json") or {}
+    # Фазу выбираем по тому же правилу, что и в обычном ходе: есть вопросы и
+    # агент не закончил — ждём автора, иначе сверка закрыта.
+    wants_more = (not data.get("ready_to_proceed")) and bool(data.get("questions"))
+    _apply_mirror_outcome(
+        ms, outcome,
+        phase_on_success=MirrorSession.PHASE_MIRROR if wants_more
+        else MirrorSession.PHASE_CONFIRMED)
+    db.session.commit()
     return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
 
 
@@ -849,7 +890,7 @@ def _run_simulation(gs, sk, document=None, game_index=1):
 @login_required
 def skeleton_retry(doc_id, game_index):
     """Повторный прогон симуляциониста (после сбоя провайдера или по желанию автора)."""
-    _owned_document(doc_id)
+    document = _owned_document(doc_id)
     gs = GameSpec.query.filter_by(document_id=doc_id, game_index=game_index).first()
     sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=game_index).first()
     if gs is None or gs.status != GameSpec.STATUS_ACCEPTED:
@@ -910,21 +951,19 @@ def balance_stats(doc_id, game_index):
         stats, source = outcome["stats"], BalanceReport.SOURCE_LOCAL
         diag = outcome.get("diag")
     else:
-        raw = (request.form.get("stats") or "").strip()
-        if not raw:
-            flash("Вставьте JSON со статистикой прогона.", "error")
+        # Принимаем ВЕСЬ вывод консоли, а не вырезанный кусок: у скелета два
+        # блока, и просьба скопировать «нужный» стабильно теряла DIAG_JSON.
+        parsed = sim_runner.parse_pasted_output(request.form.get("stats"))
+        if parsed["error"]:
+            flash(parsed["error"], "error")
             return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
-        try:
-            stats = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            flash(f"Это не похоже на JSON: {exc}", "error")
-            return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
-        if not sim_runner.looks_like_stats(stats):
-            flash("JSON разобран, но это не STATS_JSON базового прогона — нужен список "
-                  "конфигураций с полями num_players и win_rate_by_seat.", "error")
-            return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
+        stats, diag = parsed["stats"], parsed["diag"]
         source = BalanceReport.SOURCE_PASTED
-        diag = None
+        if diag is None:
+            flash("Статистика принята, но блока DIAG_JSON в тексте не было. Числовая "
+                  "оценка пройдёт полностью, а вот диагносту не хватит данных для части "
+                  "тестов — они получат честное «не выполнен». Если DIAG_JSON есть в "
+                  "выводе, вставьте текст целиком.", "warning")
 
     br.stats_json = json.dumps(stats, ensure_ascii=False)
     # DIAG_JSON сохраняем отдельно: его читает агент-диагност, «Оценщику
@@ -970,6 +1009,357 @@ def balance_json(doc_id, game_index):
     )
 
 
+@app.route("/documents/<int:doc_id>/diagnost/<int:game_index>")
+@login_required
+def diagnost(doc_id, game_index):
+    """Агент-диагност: исполнение методички балансной верификации (шаг 5).
+
+    Двухпроходный. На первый визит запускается только ТРИАЖ — вердиктов там нет
+    и быть не должно: часть тестов невыполнима без дополнительных прогонов, а
+    заказать их можно лишь разобравшись, какие тесты вообще применимы.
+    """
+    document = _owned_document(doc_id)
+    br, sk, dr = _diagnost_context(doc_id, game_index)
+
+    if dr.phase == DiagnosisReport.PHASE_NONE and not dr.error:
+        _run_triage(document, game_index, br, sk, dr)
+        db.session.commit()
+
+    return render_template(
+        "diagnost.html", document=document, game_index=game_index, dr=dr, br=br, sk=sk,
+        registry_size=len(diagnost_agent.registry_ids()),
+        route=diagnost_agent.route(dr.findings()) if dr.findings() else None,
+    )
+
+
+@app.route("/documents/<int:doc_id>/diagnost/<int:game_index>/execute", methods=["POST"])
+@login_required
+def diagnost_execute(doc_id, game_index):
+    """Исполняет заказанные прогоны и запускает проход 2.
+
+    К симуляционисту повторно не обращаемся: код скелета уже есть, доп. прогон —
+    это запись в RUN_PLAN и перезапуск файла.
+    """
+    document = _owned_document(doc_id)
+    br, sk, dr = _diagnost_context(doc_id, game_index)
+
+    if dr.phase == DiagnosisReport.PHASE_NONE:
+        flash("Сначала нужен триаж.", "warning")
+        return redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index))
+
+    extra = None
+    dr.runs_error = None
+    requests = dr.kept_requests()
+    if requests:
+        outcome = sim_runner.run_extra_runs(sk.code, requests)
+        if outcome.get("ok"):
+            extra = outcome.get("runs") or {}
+            if outcome.get("missing_runs"):
+                # id прогона обязан совпасть: заказ -> RUN_PLAN -> результат.
+                # Иначе агент на проходе 2 не сопоставит данные с тестом.
+                dr.runs_error = ("Не вернулись результаты прогонов: "
+                                 + ", ".join(outcome["missing_runs"]))
+        else:
+            dr.runs_error = outcome.get("error") or "Доп. прогоны не выполнились."
+
+    dr.extra_runs_json = json.dumps(extra, ensure_ascii=False) if extra else None
+    _run_findings(document, game_index, br, sk, dr, extra)
+    db.session.commit()
+    return redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index))
+
+
+@app.route("/documents/<int:doc_id>/diagnost/<int:game_index>/retry", methods=["POST"])
+@login_required
+def diagnost_retry(doc_id, game_index):
+    """Прогнать диагноста заново с чистого листа (после сбоя или смены модели)."""
+    document = _owned_document(doc_id)
+    br, sk, dr = _diagnost_context(doc_id, game_index)
+    dr.phase = DiagnosisReport.PHASE_NONE
+    dr.triage_json = dr.findings_json = dr.extra_runs_json = None
+    dr.triage_issues_json = dr.issues_json = None
+    dr.kept_requests_json = dr.dropped_requests_json = None
+    dr.error = dr.runs_error = None
+    _run_triage(document, game_index, br, sk, dr)
+    db.session.commit()
+    return redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index))
+
+
+@app.route("/documents/<int:doc_id>/diagnost/<int:game_index>.json")
+@login_required
+def diagnost_json(doc_id, game_index):
+    """Отдаёт Findings_diagnost.json файлом — вход редизайнера, линз и синтеза."""
+    _owned_document(doc_id)
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if dr is None or not dr.findings_json:
+        abort(404)
+    return app.response_class(
+        dr.findings_json, mimetype="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="findings_diagnost_doc{doc_id}_game{game_index}.json"'},
+    )
+
+
+def _diagnost_context(doc_id, game_index):
+    """Отчёт баланса, скелет и запись диагноста — с проверкой порядка вызова.
+
+    Диагност идёт ПОСЛЕ «Оценщика статистик»: он не пересчитывает его шесть
+    проверок, а ссылается на них через covered_tests. Без Finding_balance
+    ссылаться не на что.
+    """
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if br is None or not br.report_json:
+        flash("Сначала нужна оценка баланса — диагност ссылается на её вердикты.", "warning")
+        abort(redirect(url_for("balance", doc_id=doc_id, game_index=game_index)))
+
+    sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if sk is None or not sk.code:
+        flash("Сначала нужен собранный скелет-симулятор.", "warning")
+        abort(redirect(url_for("skeleton", doc_id=doc_id, game_index=game_index)))
+
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if dr is None:
+        dr = DiagnosisReport(document_id=doc_id, game_index=game_index)
+        db.session.add(dr)
+        db.session.commit()
+    return br, sk, dr
+
+
+def _diagnost_input(document, game_index, br, sk, attempt_number=1):
+    gs = GameSpec.query.filter_by(document_id=document.id, game_index=game_index).first()
+    canonical = stage1.game_text_for_agent(
+        document.stored_path, document.doc_type, game_index)
+    return diagnost_agent.build_input(
+        gs.spec_dict() if gs else {}, br.stats(), br.diag(), br.report(),
+        sk.meta(), canonical_text=canonical, attempt_number=attempt_number)
+
+
+def _run_triage(document, game_index, br, sk, dr):
+    """Проход 1. Бюджет прогонов режет КОД, а не модель."""
+    data = _diagnost_input(document, game_index, br, sk, dr.attempt_number)
+    outcome = diagnost_agent.run_triage(data)
+    if not outcome.get("available"):
+        dr.error = outcome.get("error") or "Диагност недоступен."
+        return
+    dr.error = None
+    dr.phase = DiagnosisReport.PHASE_TRIAGE
+    dr.triage_json = json.dumps(outcome["triage"], ensure_ascii=False)
+    dr.triage_issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
+    dr.kept_requests_json = json.dumps(outcome.get("kept_requests") or [], ensure_ascii=False)
+    dr.dropped_requests_json = json.dumps(outcome.get("dropped_requests") or [],
+                                          ensure_ascii=False)
+
+
+def _run_findings(document, game_index, br, sk, dr, extra_runs):
+    """Проход 2. Обрезанные бюджетом прогоны подаются явно — их тесты обязаны
+    получить n/a: budget_exceeded, а не исчезнуть из отчёта."""
+    data = _diagnost_input(document, game_index, br, sk, dr.attempt_number)
+    outcome = diagnost_agent.run_findings(
+        data, dr.triage(), extra_runs=extra_runs, dropped=dr.dropped_requests())
+    if not outcome.get("available"):
+        dr.error = outcome.get("error") or "Диагност недоступен."
+        return
+    dr.error = None
+    dr.phase = DiagnosisReport.PHASE_DONE
+    dr.findings_json = json.dumps(outcome["findings"], ensure_ascii=False)
+    dr.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
+
+
+@app.route("/documents/<int:doc_id>/synthesis/<int:game_index>")
+@login_required
+def synthesis(doc_id, game_index):
+    """Финал: сведение оценок в общий балл и отчёт автору (шаг 6).
+
+    Сам ничего не переоценивает — агрегирует то, что посчитали числовой оценщик,
+    диагност и (когда появится) оценщик по линзам. Первый визит запускает синтез
+    автоматически: все входы к этому моменту уже собраны.
+    """
+    document = _owned_document(doc_id)
+    br, dr, sr = _synthesis_context(doc_id, game_index)
+
+    if sr.result_json is None and not sr.error:
+        _run_synthesis(document, game_index, br, dr, sr)
+        db.session.commit()
+
+    return render_template(
+        "synthesis.html", document=document, game_index=game_index,
+        sr=sr, br=br, dr=dr,
+        history=_synthesis_history(doc_id, game_index),
+        route=_synthesis_route(doc_id, game_index, sr),
+        weights=synth_agent.CATEGORY_WEIGHTS,
+        max_attempts=RedesignAttempt.MAX_ACCEPTED_ATTEMPTS,
+    )
+
+
+@app.route("/documents/<int:doc_id>/synthesis/<int:game_index>/retry", methods=["POST"])
+@login_required
+def synthesis_retry(doc_id, game_index):
+    """Пересчитать текущую итерацию заново (после сбоя или смены модели).
+
+    Именно ПЕРЕСЧИТАТЬ, а не начать новый круг: номер попытки не растёт, иначе
+    неудачный вызов LLM молча съедал бы бюджет авто-редизайна.
+    """
+    document = _owned_document(doc_id)
+    br, dr, sr = _synthesis_context(doc_id, game_index)
+    sr.result_json = sr.reference_json = sr.issues_json = None
+    sr.overall_score = sr.score_confidence = None
+    sr.revision_required = False
+    sr.error = None
+    _run_synthesis(document, game_index, br, dr, sr)
+    db.session.commit()
+    return redirect(url_for("synthesis", doc_id=doc_id, game_index=game_index))
+
+
+@app.route("/documents/<int:doc_id>/synthesis/<int:game_index>.json")
+@login_required
+def synthesis_json(doc_id, game_index):
+    """Отдаёт финальный отчёт файлом — вместе с эталонным расчётом кода.
+
+    Расчёт кладём рядом намеренно: балл обязан быть воспроизводим вручную, и
+    без таблицы «балл × вес» проверить его нечем.
+    """
+    _owned_document(doc_id)
+    sr = _latest_synthesis(doc_id, game_index)
+    if sr is None or not sr.result_json:
+        abort(404)
+    payload = dict(sr.result() or {})
+    payload["_reference"] = sr.reference()
+    payload["_issues"] = sr.issues()
+    return app.response_class(
+        json.dumps(payload, ensure_ascii=False, indent=2), mimetype="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="synthesis_doc{doc_id}_game{game_index}.json"'},
+    )
+
+
+def _synthesis_context(doc_id, game_index):
+    """Входы синтеза + запись текущей итерации.
+
+    Диагност обязателен: без его coverage_summary нечем считать долю
+    непроверенного, а без неё `score_confidence` — выдумка. Линзы опциональны
+    (агент ещё не реализован) — их категории честно уйдут в N/A.
+    """
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if br is None or not br.report_json:
+        flash("Сначала нужна оценка баланса — синтез сводит уже готовые оценки.", "warning")
+        abort(redirect(url_for("balance", doc_id=doc_id, game_index=game_index)))
+
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if dr is None or not dr.findings_json:
+        flash("Сначала нужны вердикты диагноста — по ним считается надёжность оценки.",
+              "warning")
+        abort(redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index)))
+
+    sr = _latest_synthesis(doc_id, game_index)
+    # Новый круг открывается ровно тогда, когда авто-редизайн что-то применил:
+    # балл меняется только вслед за изменением игры.
+    expected = _synthesis_attempt_number(doc_id, game_index)
+    if sr is None or sr.attempt_number != expected:
+        sr = SynthesisReport(document_id=doc_id, game_index=game_index,
+                             attempt_number=expected)
+        db.session.add(sr)
+        db.session.commit()
+    return br, dr, sr
+
+
+def _latest_synthesis(doc_id, game_index):
+    return (SynthesisReport.query
+            .filter_by(document_id=doc_id, game_index=game_index)
+            .order_by(SynthesisReport.attempt_number.desc()).first())
+
+
+def _synthesis_history(doc_id, game_index):
+    return (SynthesisReport.query
+            .filter_by(document_id=doc_id, game_index=game_index)
+            .order_by(SynthesisReport.attempt_number.asc()).all())
+
+
+def _synthesis_attempt_number(doc_id, game_index) -> int:
+    """Номер итерации = принятых правок + 1.
+
+    Считается по применённым правкам, а не по числу вызовов агента: неудачный
+    ответ LLM не должен съедать бюджет ремонта.
+    """
+    applied = (RedesignAttempt.query
+               .filter_by(document_id=doc_id, game_index=game_index,
+                          status=RedesignAttempt.STATUS_ACCEPTED).count())
+    return applied + 1
+
+
+def _run_synthesis(document, game_index, br, dr, sr):
+    """Один прогон синтезатора. Арифметику считает код, суждение — агент."""
+    gs = GameSpec.query.filter_by(document_id=document.id, game_index=game_index).first()
+    sk = GameSkeleton.query.filter_by(document_id=document.id,
+                                      game_index=game_index).first()
+
+    attempts_used = _synthesis_attempt_number(document.id, game_index) - 1
+    attempts_left = max(0, RedesignAttempt.MAX_ACCEPTED_ATTEMPTS - attempts_used)
+
+    # Из авто-редизайнера синтез забирает ровно две вещи: что тот не тронул и
+    # что сознательно передал в рекомендации. Обе обязаны доехать до автора —
+    # это последний шаг конвейера, потерянное здесь не увидит никто.
+    not_touched, handed = [], []
+    for att in _redesign_attempts(document.id, game_index):
+        result = att.result() or {}
+        not_touched += result.get("not_touched") or []
+        handed += result.get("handed_to_recommendations") or []
+
+    previous = None
+    if sr.attempt_number > 1:
+        prev = (SynthesisReport.query
+                .filter_by(document_id=document.id, game_index=game_index,
+                           attempt_number=sr.attempt_number - 1).first())
+        previous = prev.overall_score if prev is not None else None
+
+    sim_meta = dict(sk.meta() or {}) if sk is not None else {}
+    sim_meta["subjective_actions"] = _subjective_actions(
+        gs.spec_dict() if gs else {}, sk)
+
+    data = synth_agent.build_input(
+        lenses=_lenses_findings(document.id, game_index),
+        finding_balance=br.report(), findings_diagnost=dr.findings(),
+        stats=br.stats(), sim_meta=sim_meta,
+        redesign_not_touched=not_touched, redesign_recommendations=handed,
+        attempt_number=sr.attempt_number, previous_score=previous,
+        attempts_left=attempts_left)
+
+    outcome = synth_agent.run(data)
+    sr.reference_json = json.dumps(outcome.get("reference"), ensure_ascii=False,
+                                   default=str)
+    if not outcome.get("available"):
+        sr.error = outcome.get("error") or "Синтезатор недоступен."
+        return
+
+    report = outcome["report"]
+    sr.error = None
+    sr.result_json = json.dumps(report, ensure_ascii=False)
+    sr.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
+    sr.overall_score = report.get("overall_score")
+    sr.score_confidence = report.get("score_confidence")
+    # Решение о ревизии берём из ЭТАЛОНА, а не из ответа модели: по этому полю
+    # оркестратор гонит игру на новый круг, и расхождение уже отмечено в issues.
+    sr.revision_required = bool(outcome["reference"]["revision"]["required"])
+
+
+def _lenses_findings(doc_id, game_index):
+    """Findings_lenses.json, когда «Оценщик по линзам» появится.
+
+    Сейчас агент не реализован, и вход отсутствует ЗАКОНОМЕРНО, а не по ошибке:
+    синтезатор помечает чисто-линзовые категории как N/A и говорит автору, что
+    качественная сторона не оценивалась. Подсовывать вместо этого пустой объект
+    нельзя — так «не оценивали» превратилось бы в «оценили и ничего не нашли».
+    """
+    return None
+
+
+def _synthesis_route(doc_id, game_index, sr):
+    """Что дальше по итогам синтеза — решает код под счётчиком попыток."""
+    if sr is None or not sr.result_json:
+        return None
+    attempts_used = _synthesis_attempt_number(doc_id, game_index) - 1
+    return synth_agent.route(sr.result(), sr.reference(), attempts_used,
+                             RedesignAttempt.MAX_ACCEPTED_ATTEMPTS)
+
+
 @app.route("/documents/<int:doc_id>/redesign/<int:game_index>")
 @login_required
 def redesign(doc_id, game_index):
@@ -985,15 +1375,34 @@ def redesign(doc_id, game_index):
     br, gs = _redesign_context(doc_id, game_index)
 
     attempts = _redesign_attempts(doc_id, game_index)
-    trigger = redesign_agent.should_trigger(br.report())
+    sr = _latest_synthesis(doc_id, game_index)
+    trigger = redesign_agent.should_trigger(br.report(), _synthesis_verdict(sr))
     current = next((a for a in attempts if a.status == RedesignAttempt.STATUS_PROPOSED), None)
 
     return render_template(
         "redesign.html", document=document, game_index=game_index,
-        br=br, gs=gs, attempts=attempts, current=current, trigger=trigger,
-        max_attempts=RedesignAttempt.MAX_ATTEMPTS,
+        br=br, gs=gs, attempts=attempts, current=current, trigger=trigger, sr=sr,
+        max_attempts=RedesignAttempt.MAX_ACCEPTED_ATTEMPTS,
         used=len([a for a in attempts if a.status == RedesignAttempt.STATUS_ACCEPTED]),
+        # Второй бюджет — потолок расходов на подбор. Считаются ВСЕ попытки
+        # любого статуса, включая отклонённые: модель звали, деньги потрачены.
+        max_proposals=RedesignAttempt.MAX_PROPOSALS,
+        proposals=len(attempts),
     )
+
+
+def _synthesis_verdict(sr):
+    """Вердикт синтезатора для авто-редизайнера: ревизия и её причины.
+
+    Флаг берётся из колонки, которую пишет код по эталонному расчёту, а не из
+    текста ответа модели — по нему открывается круг ремонта.
+    """
+    if sr is None or not sr.result_json:
+        return None
+    return {"revision_required": bool(sr.revision_required),
+            "revision_reason": sr.revision_reason,
+            "top_priorities": sr.top_priorities,
+            "overall_score": sr.overall_score}
 
 
 @app.route("/documents/<int:doc_id>/redesign/<int:game_index>/propose", methods=["POST"])
@@ -1004,16 +1413,29 @@ def redesign_propose(doc_id, game_index):
     br, gs = _redesign_context(doc_id, game_index)
 
     finding = br.report()
-    trigger = redesign_agent.should_trigger(finding)
+    sr = _latest_synthesis(doc_id, game_index)
+    verdict = _synthesis_verdict(sr)
+    trigger = redesign_agent.should_trigger(finding, verdict)
     if not trigger["trigger"]:
         flash(f"Авто-редизайн не нужен: {trigger['reason']}.", "warning")
         return redirect(url_for("redesign", doc_id=doc_id, game_index=game_index))
 
     attempts = _redesign_attempts(doc_id, game_index)
     accepted = [a for a in attempts if a.status == RedesignAttempt.STATUS_ACCEPTED]
-    if len(accepted) >= RedesignAttempt.MAX_ATTEMPTS:
-        flash(f"Исчерпан лимит попыток авто-редизайна ({RedesignAttempt.MAX_ATTEMPTS}). "
-              "Оставшиеся находки идут в рекомендации автору.", "warning")
+
+    # Два бюджета проверяются раздельно, и сообщения у них разные: «игра уже
+    # менялась трижды» и «предложений сгенерировано достаточно» — это разные
+    # причины остановки, и автор должен понимать, какая сработала.
+    if len(accepted) >= RedesignAttempt.MAX_ACCEPTED_ATTEMPTS:
+        flash(f"Исчерпан лимит правок структуры "
+              f"({RedesignAttempt.MAX_ACCEPTED_ATTEMPTS}). Оставшиеся находки идут "
+              "в рекомендации автору.", "warning")
+        return redirect(url_for("redesign", doc_id=doc_id, game_index=game_index))
+    if len(attempts) >= RedesignAttempt.MAX_PROPOSALS:
+        flash(f"Исчерпан лимит предложений ({RedesignAttempt.MAX_PROPOSALS}): столько "
+              "раз агент уже подбирал правку для этой игры. Ремонт не запрещён — "
+              "закончился бюджет на подбор. Оставшиеся находки идут в рекомендации.",
+              "warning")
         return redirect(url_for("redesign", doc_id=doc_id, game_index=game_index))
 
     # Незакрытое предложение заменяем новым, а не плодим параллельные.
@@ -1022,13 +1444,32 @@ def redesign_propose(doc_id, game_index):
         db.session.delete(a)
     db.session.flush()
 
-    attempt_number = len(accepted) + 1
+    # Номер — идентификатор записи, а не счётчик бюджета: отклонённая попытка
+    # свой номер сохраняет, и переиспользовать его нельзя.
+    attempt_number = RedesignAttempt.next_attempt_number(doc_id, game_index)
     spec_root = gs.spec_dict() or {}
     previous = redesign_agent.collect_previous_changes(
         [a.result() or {} for a in accepted])
 
+    # Когда круг открыл синтезатор, режим — B: агент чинит не один сломанный
+    # флаг, а то, что назвал приоритетами финальный отчёт. Вердикты диагноста
+    # подаются всегда, если они есть, — иначе правка идёт по одной шестой
+    # картины, которую видел числовой оценщик.
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    diag_findings = None
+    if dr is not None and dr.findings_json:
+        diag_findings = [r for r in (dr.findings() or {}).get("results") or []
+                         if r.get("verdict") in ("warning", "problem")]
+
+    # Критику передаём только когда синтезатор ДЕЙСТВИТЕЛЬНО требует ревизии:
+    # detect_mode переключается в B по самому факту её наличия, и сам по себе
+    # готовый отчёт с проходным баллом не повод для полного разбора.
+    critique = verdict if (verdict or {}).get("revision_required") else None
+
     outcome = redesign_agent.run(spec_root, finding, attempt_number=attempt_number,
-                                 previous_changes=previous)
+                                 previous_changes=previous,
+                                 findings_diagnost=diag_findings,
+                                 synthesis_critique=critique)
 
     att = RedesignAttempt(document_id=doc_id, game_index=game_index,
                           attempt_number=attempt_number,
@@ -1092,10 +1533,22 @@ def redesign_decide(doc_id, game_index):
     br.report_json = None
     br.issues_json = None
     br.error = None
+
+    # Вердикты диагноста вынесены о ПРЕЖНЕЙ структуре и после правки не значат
+    # ничего. Оставить их значило бы посчитать итоговый балл по перемешанным
+    # данным: числа новые, вердикты старые — и разницы в отчёте не видно.
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if dr is not None:
+        dr.phase = DiagnosisReport.PHASE_NONE
+        dr.triage_json = dr.findings_json = dr.extra_runs_json = None
+        dr.triage_issues_json = dr.issues_json = None
+        dr.kept_requests_json = dr.dropped_requests_json = None
+        dr.error = dr.runs_error = None
+        dr.attempt_number = (dr.attempt_number or 1) + 1
     db.session.commit()
 
-    flash("Правка применена. Скелет и статистика сброшены — игру нужно пересимулировать.",
-          "success")
+    flash("Правка применена. Скелет, статистика и вердикты диагноста сброшены — "
+          "игру нужно пересимулировать и оценить заново.", "success")
     return redirect(url_for("skeleton", doc_id=doc_id, game_index=game_index))
 
 
@@ -1207,6 +1660,7 @@ def _apply_mirror_outcome(ms, outcome, phase_on_success):
     # confirmed, где карты уже нет. Извлеченцу нужны именно статусы absent.
     if data.get("map"):
         ms.map_json = json.dumps(data["map"], ensure_ascii=False)
+    ms.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
     ms.ready_to_proceed = bool(data.get("ready_to_proceed"))
     ms.phase = phase_on_success
 

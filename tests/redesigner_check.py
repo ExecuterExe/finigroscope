@@ -258,11 +258,7 @@ class MockProvider(LLMProvider):
                                 "metric_responds_immediately": True,
                                 "fixed_length": False, "end_reasons_used": ["most_points"],
                                 "hooks_filled": {}}, ensure_ascii=False)
-                    + "
-
-```python
-print('sk')
-```")
+                    + "\n\n```python\nprint('sk')\n```")
         if "извлекатель структуры" in system:
             return json.dumps(SPEC, ensure_ascii=False)
         if "Ответов автора пока нет" in user:
@@ -278,7 +274,8 @@ print('sk')
 register("mock", MockProvider)
 
 import app as A  # noqa: E402
-from models import BalanceReport, GameSkeleton, GameSpec, RedesignAttempt  # noqa: E402
+from models import (BalanceReport, GameSkeleton, GameSpec,  # noqa: E402
+                    RedesignAttempt, db)
 
 cl = A.app.test_client()
 essay = r"C:\Users\Eugene\Desktop\НСПК\Фин-игры\Фин-игры эссе - версия от 1 февраля.docx"
@@ -357,6 +354,100 @@ with A.app.app_context():
 # --- без отчёта о балансе экран закрыт ---------------------------------------
 closed = cl.get(f"/documents/{doc_id}/redesign/1", follow_redirects=True).get_data(as_text=True)
 checks["без оценки баланса вход закрыт"] = "Сначала нужна оценка баланса" in closed
+
+# ============================================================================
+# ЧАСТЬ 8. Отказ автора: номер попытки и два бюджета (П5, П6)
+# ============================================================================
+# Номер попытки — идентификатор записи, а не счётчик бюджета. Пока их считали
+# одним числом («принятых + 1»), отклонённая попытка занимала номер, и следующее
+# предложение падало с UNIQUE constraint — то есть отказ от правки ломал сервис.
+def fresh_game(tag):
+    """Новая игра с критичным флагом — чистое поле для сценария отказов."""
+    with open(essay, "rb") as fh:
+        resp = cl.post("/upload", data={"doc_type": "essay", "file": (fh, f"{tag}.docx")},
+                       content_type="multipart/form-data", follow_redirects=True)
+    did = int(re.search(r"/documents/(\d+)/games", resp.request.path).group(1))
+    cl.get(f"/documents/{did}/mirror/1")
+    cl.post(f"/documents/{did}/mirror/1/reply", data={"answer": "ок"}, follow_redirects=True)
+    cl.get(f"/documents/{did}/spec/1")
+    cl.post(f"/documents/{did}/spec/1/accept", follow_redirects=True)
+    cl.get(f"/documents/{did}/skeleton/1")
+    cl.post(f"/documents/{did}/balance/1/stats",
+            data={"stats": json.dumps(STATS, ensure_ascii=False)}, follow_redirects=True)
+    return did
+
+
+def restore_balance(did):
+    """Возвращает статистику после принятой правки — иначе экран закроется."""
+    with A.app.app_context():
+        br = BalanceReport.query.filter_by(document_id=did, game_index=1).first()
+        br.stats_json = json.dumps(STATS, ensure_ascii=False)
+        br.stats_source = BalanceReport.SOURCE_PASTED
+        br.report_json = json.dumps(finding([CRIT]), ensure_ascii=False)
+        br.issues_json = json.dumps([])
+        db.session.commit()
+
+
+d5 = fresh_game("p5-reject")
+cl.post(f"/documents/{d5}/redesign/1/propose")
+cl.post(f"/documents/{d5}/redesign/1/decide", data={"action": "reject"})
+with A.app.app_context():
+    att = RedesignAttempt.query.filter_by(document_id=d5, game_index=1).first()
+    checks["П5: первая правка отклонена"] = att.status == RedesignAttempt.STATUS_REJECTED
+
+# Раньше здесь был 500: UNIQUE constraint по (документ, игра, номер попытки).
+again = cl.post(f"/documents/{d5}/redesign/1/propose", follow_redirects=True)
+checks["П5: повторное предложение не падает"] = again.status_code == 200
+with A.app.app_context():
+    nums = sorted(a.attempt_number for a in
+                  RedesignAttempt.query.filter_by(document_id=d5, game_index=1).all())
+    checks["П5: номера попыток различны"] = nums == [1, 2]
+    pending = RedesignAttempt.query.filter_by(
+        document_id=d5, game_index=1, status=RedesignAttempt.STATUS_PROPOSED).first()
+    checks["П5: новое предложение получило номер 2"] = (
+        pending is not None and pending.attempt_number == 2)
+
+# --- П6: два независимых бюджета ---------------------------------------------
+checks["П6: бюджеты разведены"] = (RedesignAttempt.MAX_ACCEPTED_ATTEMPTS == 3
+                                   and RedesignAttempt.MAX_PROPOSALS == 6)
+
+d6 = fresh_game("p6-budget")
+for i in range(RedesignAttempt.MAX_PROPOSALS):
+    cl.post(f"/documents/{d6}/redesign/1/propose")
+    cl.post(f"/documents/{d6}/redesign/1/decide", data={"action": "reject"})
+with A.app.app_context():
+    total = RedesignAttempt.query.filter_by(document_id=d6, game_index=1).count()
+    checks["П6: шесть предложений сгенерировано"] = total == RedesignAttempt.MAX_PROPOSALS
+
+# Седьмое предложение не должно ни создаваться, ни вызывать модель.
+before = calls["redesign"]
+blocked = cl.post(f"/documents/{d6}/redesign/1/propose",
+                  follow_redirects=True).get_data(as_text=True)
+checks["П6: седьмое предложение отклонено"] = calls["redesign"] == before
+with A.app.app_context():
+    checks["П6: лишней записи не появилось"] = RedesignAttempt.query.filter_by(
+        document_id=d6, game_index=1).count() == RedesignAttempt.MAX_PROPOSALS
+# Автор должен понять, что исчерпаны ПРЕДЛОЖЕНИЯ, а не право на ремонт.
+checks["П6: причина блокировки названа"] = "предложен" in blocked.lower()
+checks["П6: кнопки больше нет"] = "Предложить правку" not in blocked
+
+# Принятия блокируют раньше — трёх достаточно.
+d6b = fresh_game("p6-accepted")
+for i in range(RedesignAttempt.MAX_ACCEPTED_ATTEMPTS):
+    cl.post(f"/documents/{d6b}/redesign/1/propose")
+    cl.post(f"/documents/{d6b}/redesign/1/decide", data={"action": "accept"})
+    restore_balance(d6b)   # принятие обнуляет статистику, экран без неё закрыт
+before = calls["redesign"]
+stop = cl.post(f"/documents/{d6b}/redesign/1/propose",
+               follow_redirects=True).get_data(as_text=True)
+checks["П6: четвёртое принятие не разрешено"] = calls["redesign"] == before
+with A.app.app_context():
+    accepted_n = RedesignAttempt.query.filter_by(
+        document_id=d6b, game_index=1,
+        status=RedesignAttempt.STATUS_ACCEPTED).count()
+    checks["П6: принято ровно три"] = accepted_n == RedesignAttempt.MAX_ACCEPTED_ATTEMPTS
+    checks["П6: предложений меньше потолка"] = RedesignAttempt.query.filter_by(
+        document_id=d6b, game_index=1).count() < RedesignAttempt.MAX_PROPOSALS
 
 for label, ok in checks.items():
     print(("OK  " if ok else "FAIL") + " | " + label)

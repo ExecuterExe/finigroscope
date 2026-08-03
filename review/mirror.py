@@ -49,6 +49,107 @@ def _split_response(raw_text: str):
     return human, data
 
 
+# Узел «Компоненты» ищем по названию: промпт не фиксирует его написание, а
+# формулировки у моделей плавают («Компоненты», «Компоненты и материалы»).
+COMPONENT_WORDS = ("компонент", "материал")
+# Слова, по которым узнаём вопрос о компонентах, если модель не проставила type.
+COMPONENT_QUESTION_WORDS = ("компонент", "карт", "колод", "жетон", "фишк", "поле",
+                            "кубик", "материал", "состав")
+MAX_QUESTIONS = 10
+
+
+def _issue(code: str, message: str, severity: str = "warning") -> dict:
+    return {"code": code, "message": message, "severity": severity}
+
+
+def components_node(node_map: list):
+    """Узел карты понимания про компоненты — он из слоя «ядро» и обязателен."""
+    for node in node_map or []:
+        if any(w in str(node.get("node") or "").lower() for w in COMPONENT_WORDS):
+            return node
+    return None
+
+
+def asks_about_components(questions: list) -> bool:
+    for q in questions or []:
+        if q.get("type") == "components":
+            return True
+        text = f"{q.get('question') or ''} {q.get('why') or ''}".lower()
+        if any(w in text for w in COMPONENT_QUESTION_WORDS):
+            return True
+    return False
+
+
+def validate_pass(data: dict, round_no: int = 1, prior_json: dict = None) -> list:
+    """Проверяет ответ агента на молчаливые пропуски. Ничего не исправляет.
+
+    Главная из них — незаданный вопрос о компонентах. Он ничем себя не выдаёт:
+    автор видит красивую карту, соглашается, и только через четыре шага целая
+    группа проверок баланса артефактов уходит в «не выполнено». К тому моменту
+    вернуться и спросить уже нельзя — сверка закрыта.
+    """
+    issues = []
+    # Ответ без машинного блока — не «пустая сверка», а потерянная. Оркестратор
+    # в этом случае закрывает стадию (вопросов нет — значит переспрашивать не о
+    # чем), и автор молча остаётся без карты понимания и без уточнений: дальше
+    # извлеченец получит только сырой текст и его последний ответ.
+    if data is None:
+        return [_issue(
+            "json_missing",
+            "Агент вернул текст без машинного блока — карта понимания и вопросы "
+            "не разобраны. Сверка на этом закроется, а извлеченец получит только "
+            "исходный текст. Стоит прогнать проход заново.", "error")]
+
+    node_map = data.get("map") or []
+    questions = data.get("questions") or []
+
+    if node_map:
+        comp = components_node(node_map)
+        if comp is None:
+            issues.append(_issue(
+                "components_node_missing",
+                "В карте понимания нет узла о компонентах, хотя он из обязательного "
+                "слоя «ядро» — его проверяют всегда.", "error"))
+        elif comp.get("status") == "absent":
+            issues.append(_issue(
+                "components_marked_absent",
+                "Компоненты помечены как «механики нет». Для настольной игры это почти "
+                "всегда ошибка: физические материалы есть у любой из них, и такой статус "
+                "бесшумно закрывает тест на достаточность компонентов."))
+        elif comp.get("status") in ("unclear", "missing") and not asks_about_components(questions):
+            issues.append(_issue(
+                "components_not_asked",
+                f"Компоненты в статусе «{comp.get('status')}», но ни одного вопроса о них "
+                "не задано. Без состава и количеств проверки баланса артефактов "
+                "(карты-имбы, карты-мусор, перекос контента) выполнить будет нечем.",
+                "error"))
+
+    if len(questions) > MAX_QUESTIONS:
+        issues.append(_issue(
+            "too_many_questions",
+            f"Вопросов {len(questions)}, а предел — {MAX_QUESTIONS}. Длинный список "
+            "автор дочитывает реже, чем короткий."))
+    for q in questions:
+        if not (q.get("why") or "").strip():
+            issues.append(_issue(
+                "question_without_why",
+                f"У вопроса «{(q.get('question') or '')[:60]}» нет строки «зачем нужно» — "
+                "без неё автор не понимает, почему это важно, и чаще пропускает вопрос."))
+
+    # Уточнения автора обязаны накапливаться: на входе извлеченца лежат именно
+    # они, и потерянный ответ первого раунда назад уже не вернуть.
+    if round_no > 1 and prior_json:
+        was = len((prior_json or {}).get("author_clarifications") or [])
+        now = len(data.get("author_clarifications") or [])
+        if was and now < was:
+            issues.append(_issue(
+                "clarifications_lost",
+                f"В прошлом раунде уточнений автора было {was}, сейчас {now}. Ответы "
+                "прошлых раундов обязаны переноситься — именно они уходят извлеченцу.",
+                "error"))
+    return issues
+
+
 def _build_user_message(game_text: str, prior_json: dict = None, author_answer: str = None,
                         round_no: int = 1, max_rounds: int = 3,
                         revision_note: str = None) -> str:
@@ -206,7 +307,9 @@ def run_pass(game_text: str, prior_json: dict = None, author_answer: str = None,
              revision_note: str = None) -> dict:
     """Один вызов агента: проход 1, очередная сверка (раунд N) или режим правки.
 
-    Возвращает {available, text, json, raw, provider} либо {available: False, error}.
+    Возвращает {available, text, json, issues, raw, provider} либо
+    {available: False, error}. `issues` — молчаливые пропуски, найденные кодом;
+    ответ они не меняют, но автору показываются.
     """
     system = prompts.load_mirror_prompt()
     user = _build_user_message(game_text, prior_json, author_answer,
@@ -222,6 +325,9 @@ def run_pass(game_text: str, prior_json: dict = None, author_answer: str = None,
         "available": True,
         "text": human_text,
         "json": data,
+        # В режиме правки карты и вопросов нет по замыслу — проверять нечего.
+        "issues": [] if revision_note is not None
+        else validate_pass(data, round_no, prior_json),
         "raw": resp.text,
         "provider": resp.provider,
         "cached": resp.cached,

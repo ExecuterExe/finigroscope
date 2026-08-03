@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Диагност — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set triage = dr.triage() or {} %}
+{% set findings = dr.findings() or {} %}
+{% set results = findings.get('results') or [] %}
+{% set cs = dr.coverage %}
+{% set verdict_meta = {
+    'ok':      ('✅', 'st-ok',     'норма'),
+    'warning': ('⚠️', 'st-warn',   'замечание'),
+    'problem': ('❌', 'st-miss',   'проблема'),
+    'n/a':     ('➖', 'st-absent', 'не выполнен')
+} %}
+{% set na_ru = {
+    'mechanic_absent': 'механики нет в игре',
+    'no_data': 'данных не хватает',
+    'method_blind': 'метод неинформативен',
+    'search_incomplete': 'поиск неполон',
+    'budget_exceeded': 'превышен бюджет прогонов'
+} %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('balance', doc_id=document.id, game_index=game_index) }}">← к оценке баланса</a>
+        <h1>Диагност: методичка балансной верификации</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Агент исполняет {{ registry_size }} тестов методички — всё, чего не видят шесть проверок оценщика статистик: софтлоки, эксплойт-петли, предопределённость, баланс карт, компоненты, масштабируемость. Работает в два прохода: сначала решает, какие тесты применимы и какие прогоны нужны, потом выносит вердикты.</p>
+    </div>
+
+    {% if dr.error %}
+    <div class="mirror-error">
+        <span>🛑 {{ dr.error }}</span>
+        <form method="post" action="{{ url_for('diagnost_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">Попробовать снова</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if dr.phase == 'none' and not dr.error %}
+    <div class="mirror-loading">Агент разбирает, какие тесты применимы к вашей игре…</div>
+    {% endif %}
+
+    {# --- ПРОХОД 1: триаж --- #}
+    {% if triage %}
+    {% set applicability = triage.get('applicability') or [] %}
+    {# selectattr, а не {% do %}: расширение jinja2.ext.do во Flask не включено #}
+    {% set st_applicable = applicability | selectattr('status', 'equalto', 'applicable') | list %}
+    {% set st_needs_run = applicability | selectattr('status', 'equalto', 'needs_run') | list %}
+    {% set st_na = applicability | selectattr('status', 'equalto', 'n/a') | list %}
+
+    <div class="mcard">
+        <div class="mcard-title">🔎 Триаж применимости <span class="mcard-count">{{ applicability | length }} из {{ registry_size }}</span></div>
+        <p class="dash-note">Вердиктов на этом проходе нет — только решение, какие тесты вообще применимы к этой игре и каких данных не хватает. Честно отсеянный тест с причиной лучше формально «пройденного».</p>
+        <div class="spec-grid">
+            <div class="spec-item"><span class="spec-k">Применимы сразу</span><span class="spec-v score-big">{{ st_applicable | length }}</span></div>
+            <div class="spec-item"><span class="spec-k">Нужен доп. прогон</span><span class="spec-v score-big">{{ st_needs_run | length }}</span></div>
+            <div class="spec-item"><span class="spec-k">Не выполнимы</span><span class="spec-v score-big">{{ st_na | length }}</span></div>
+        </div>
+
+        {% if st_na %}
+        <div class="spec-line"><b>Почему отсеяны:</b></div>
+        <ul class="open-list">
+            {% for a in st_na[:12] %}
+            <li class="open-item"><b>{{ a.get('test') }}</b> — {{ na_ru.get(a.get('reason'), a.get('reason')) }}{% if a.get('detail') %}: {{ a['detail'] }}{% endif %}</li>
+            {% endfor %}
+            {% if st_na | length > 12 %}<li class="open-item">…и ещё {{ st_na | length - 12 }}</li>{% endif %}
+        </ul>
+        {% endif %}
+    </div>
+
+    {% if dr.triage_issues() %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🧪 Замечания к триажу <span class="mcard-count">{{ dr.triage_issues() | length }}</span></div>
+        <ul class="gap-list">
+            {% for i in dr.triage_issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head"><code>{{ i.get('code') }}</code></div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# --- заказанные прогоны --- #}
+    {% if dr.kept_requests() or dr.dropped_requests() %}
+    <div class="mcard">
+        <div class="mcard-title">🎲 Дополнительные прогоны <span class="mcard-count">израсходовано {{ dr.budget_used }} из {{ dr.budget_limit }}</span></div>
+        <p class="dash-note">Бюджет держит сервис, а не модель: лишний прогон — это время и деньги. К симуляционисту повторно не обращаемся — запись дописывается в план уже готового скелета. Счётчик показывает фактически исполненное, а не заявленное агентом.</p>
+        <ul class="gap-list">
+            {% for r in dr.kept_requests() %}
+            <li class="gap-item">
+                <div class="gap-head">
+                    <code>{{ r.get('run_id') }}</code>
+                    <span class="qa-badge">{{ r.get('request_type') }}</span>
+                    {% if r.get('for_tests') %}<span class="chip-mini">для тестов {{ r['for_tests'] | join(', ') }}</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ r.get('why') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+        {% if dr.dropped_requests() %}
+        <div class="round-note">Обрезано бюджетом: {{ dr.dropped_requests() | map(attribute='run_id') | join(', ') }}. Их тесты обязаны получить «не выполнен» с причиной «превышен бюджет» — молча пропасть они не могут.</div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if dr.runs_error %}
+    <div class="mirror-error"><span>⚠️ {{ dr.runs_error }}</span></div>
+    {% endif %}
+
+    {% if dr.phase == 'triage' %}
+    <div class="next-stage-cta">
+        <form method="post" action="{{ url_for('diagnost_execute', doc_id=document.id, game_index=game_index) }}" id="exec-form">
+            <button class="btn btn-primary" type="submit" id="exec-btn">
+                {% if dr.kept_requests() %}Выполнить прогоны и вынести вердикты →{% else %}Вынести вердикты →{% endif %}
+            </button>
+        </form>
+        <span class="cta-hint">{% if dr.kept_requests() %}скелет перезапустится с дописанными прогонами{% else %}доп. прогоны не потребовались{% endif %}</span>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# --- ПРОХОД 2: вердикты --- #}
+    {% if findings %}
+    {% set crit = findings.get('critical_flags') or [] %}
+    <div class="mirror-badge {{ 'badge-open' if crit else 'badge-ready' }}">
+        {% if crit %}⚠️ Найдено критичное: {{ crit | map(attribute='code') | join(', ') }} — игру нужно чинить до содержательной оценки.
+        {% else %}✅ Критичных дефектов нет — можно переходить к содержательной оценке.{% endif %}
+    </div>
+
+    {# n/a — это НЕ «проблем не найдено». Показываем разрыв явно и первым делом. #}
+    {% if cs %}
+    <div class="mcard {{ 'mcard-warn' if dr.unmeasured_count else '' }}">
+        <div class="mcard-title">📋 Что проверено, а что нет</div>
+        <div class="spec-grid">
+            <div class="spec-item"><span class="spec-k">Всего тестов</span><span class="spec-v score-big">{{ cs.get('tests_total', '—') }}</span></div>
+            <div class="spec-item"><span class="spec-k">Норма</span><span class="spec-v score-big">{{ cs.get('ok', 0) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Замечания</span><span class="spec-v score-big">{{ cs.get('warning', 0) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Проблемы</span><span class="spec-v score-big">{{ cs.get('problem', 0) }}</span></div>
+            <div class="spec-item"><span class="spec-k">Не выполнено</span><span class="spec-v score-big">{{ cs.get('n_a', 0) }}</span></div>
+        </div>
+        {% if cs.get('n_a_breakdown') %}
+        <div class="spec-line"><b>Почему не выполнено:</b>
+            {% for k, v in cs['n_a_breakdown'].items() %}{% if v %}<span class="chip-mini">{{ na_ru.get(k, k) }}: {{ v }}</span>{% endif %}{% endfor %}
+        </div>
+        {% endif %}
+        {% if dr.unmeasured_count %}
+        <div class="round-note">⚠️ <b>{{ dr.unmeasured_count }}</b> тестов не выполнены по причинам, которые НЕ означают «проблемы нет»: данных не хватило, метод неинформативен, поиск неполон или кончился бюджет. Это пробелы проверки, а не подтверждение качества — они дойдут до финального отчёта.</div>
+        {% endif %}
+        {% if cs.get('note') %}<div class="qa-why">{{ cs['note'] }}</div>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if crit %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🚩 Критичные находки <span class="mcard-count">{{ crit | length }}</span></div>
+        <p class="dash-note">Идут в авто-редизайнер немедленно, не дожидаясь синтеза: игра с рабочей читерской петлёй иначе наберёт проходной балл за счёт хорошей темы и уйдёт в отчёт нечинёной.</p>
+        <ul class="gap-list">
+            {% for f in crit %}
+            <li class="gap-item gap-critical">
+                <div class="gap-head">
+                    <code>{{ f.get('code') }}</code>
+                    <span class="qa-badge sev-critical">критично</span>
+                    {% if f.get('affected_configs') %}<span class="chip-mini">при N = {{ f['affected_configs'] | join(', ') }}</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ f.get('detail') }}</div>
+                {% if f.get('where') %}<div class="qa-why">Где: <code>{{ f['where'] }}</code></div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        <div class="accept-actions">
+            <a class="btn btn-primary" href="{{ url_for('redesign', doc_id=document.id, game_index=game_index) }}">К авто-редизайну (режим D) →</a>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if results %}
+    <div class="mcard">
+        <div class="mcard-title">🔬 Результаты по тестам <span class="mcard-count">{{ results | length }}</span></div>
+        {% set shown = results | rejectattr('verdict', 'equalto', 'n/a') | list %}
+        <div class="map-grid">
+            {% for r in shown %}
+            {% set vm = verdict_meta.get(r.get('verdict'), ('•', 'st-warn', r.get('verdict'))) %}
+            <div class="map-node {{ vm[1] }}">
+                <span class="map-icon">{{ vm[0] }}</span>
+                <div class="map-body">
+                    <div class="map-name">
+                        {{ r.get('test') }} · {{ r.get('name') }}
+                        {% if r.get('confidence') == 'assumed' %}<span class="qa-badge qa-badge-ctx">мягкое число</span>{% endif %}
+                        {% if r.get('severity') and r['severity'] != 'n/a' %}<span class="qa-badge sev-{{ r['severity'] }}">{{ r['severity'] }}</span>{% endif %}
+                    </div>
+                    {% if r.get('evidence') %}<div class="map-note">{{ r['evidence'] }}</div>{% endif %}
+                    {% if r.get('source') %}<div class="qa-why">Источник: <code>{{ r['source'] }}</code></div>{% endif %}
+                </div>
+                <span class="map-tag">{{ vm[2] }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% set skipped = results | selectattr('verdict', 'equalto', 'n/a') | list %}
+        {% if skipped %}
+        <details class="raw-toggle">
+            <summary>Показать невыполненные тесты ({{ skipped | length }})</summary>
+            <ul class="open-list raw-body">
+                {% for r in skipped %}
+                <li class="open-item"><b>{{ r.get('test') }}</b> {{ r.get('name') }} — {{ na_ru.get(r.get('reason'), r.get('reason')) }}{% if r.get('evidence') %}: {{ r['evidence'] }}{% endif %}</li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if findings.get('notes_for_lenses') %}
+    <div class="mcard">
+        <div class="mcard-title">📝 Вопросы для содержательной оценки <span class="mcard-count">{{ findings['notes_for_lenses'] | length }}</span></div>
+        <p class="dash-note">По этим тестам число посчитано, а вердикт зависит от замысла игры — его вынесет агент линз. Социальные находки (сговор, кингмейкинг) идут только сюда: автоматически они не чинятся.</p>
+        <ul class="gap-list">
+            {% for n in findings['notes_for_lenses'] %}
+            <li class="gap-item">
+                {% if n.get('from_test') %}<div class="gap-head"><code>тест {{ n['from_test'] }}</code></div>{% endif %}
+                <div class="gap-missing">{{ n.get('observation') }}</div>
+                {% if n.get('question_for_lenses') %}<div class="qa-why">Вопрос линзам: {{ n['question_for_lenses'] }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if findings.get('handed_to_recommendations') %}
+    <div class="mcard">
+        <div class="mcard-title">📨 В рекомендации автору <span class="mcard-count">{{ findings['handed_to_recommendations'] | length }}</span></div>
+        <ul class="gap-list">
+            {% for h in findings['handed_to_recommendations'] %}
+            <li class="gap-item">
+                <div class="gap-missing">{{ h.get('finding') }}</div>
+                {% if h.get('suggestion') %}<div class="qa-why">Что можно сделать: {{ h['suggestion'] }}</div>{% endif %}
+                {% if h.get('why_not_auto') %}<div class="qa-why">Почему не автоматически: {{ h['why_not_auto'] }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if dr.issues() %}
+    <div class="mcard {{ 'mcard-warn' if dr.blocking_issues else '' }}">
+        <div class="mcard-title">🧪 Самопроверка отчёта <span class="mcard-count">{{ dr.issues() | length }}</span></div>
+        <p class="dash-note">Самая дорогая ошибка этого шага — превратить «не выполнен» в «норма»: в отчёте они выглядят одинаково. Поэтому полнота перечня тестов и причины n/a проверяются кодом.</p>
+        <ul class="gap-list">
+            {% for i in dr.issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head">
+                    <code>{{ i.get('code') }}</code>
+                    {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="next-stage-cta">
+        <a class="btn btn-primary" href="{{ url_for('synthesis', doc_id=document.id, game_index=game_index) }}">К итоговой оценке →</a>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('diagnost_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать Findings_diagnost.json</a>
+        <form method="post" action="{{ url_for('diagnost_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">↻ Прогнать заново</button>
+        </form>
+        <span class="cta-hint">
+            {%- if route and route.lenses_ready %}содержательная оценка по линзам пока не реализована — её категории уйдут в итог как «не оценивались»
+            {%- else %}сначала ремонт критичного, потом итоговый балл{% endif -%}
+        </span>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+// Проход 2 = доп. прогоны симуляции + обращение к модели. Это долго.
+(function () {
+    var form = document.getElementById("exec-form");
+    if (!form) return;
+    form.addEventListener("submit", function () {
+        var btn = document.getElementById("exec-btn");
+        btn.disabled = true;
+        btn.textContent = "Гоняем симуляцию и выносим вердикты…";
+    });
+})();
+</script>
+{% endblock %}

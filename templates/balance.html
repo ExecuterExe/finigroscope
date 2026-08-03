@@ -20,6 +20,10 @@
     'eliminations': 'Вылеты'
 } %}
 {% set severity_ru = {'critical': 'критично', 'major': 'существенно', 'minor': 'терпимо'} %}
+{# Русское склонение по числу: «1 замечание», «2 замечания», «5 замечаний». #}
+{% macro plural(n, one, few, many) -%}
+{{ n }} {{ many if 11 <= n % 100 <= 14 else (one if n % 10 == 1 else (few if 2 <= n % 10 <= 4 else many)) }}
+{%- endmacro %}
 
 <section class="mirror-screen">
     <div class="mirror-head">
@@ -37,40 +41,70 @@
     {# --- приём статистики ------------------------------------------------- #}
     <div class="mcard mcard-accent">
         <div class="mcard-title">📥 Нужна статистика прогона</div>
-        <p class="dash-note">Скелет собран, но его ещё никто не запускал. Самый безопасный путь — прогнать его самостоятельно: откройте <a href="https://www.online-python.com/" target="_blank" rel="noopener">online-python.com</a>, вставьте <a href="{{ url_for('skeleton_code', doc_id=document.id, game_index=game_index) }}">скачанный файл</a> целиком и нажмите Run. Внизу вывода будет строка «JSON ДЛЯ ОЦЕНКИ БАЛАНСА» — скопируйте всё, что после неё, и вставьте сюда.</p>
+        <p class="dash-note">Скелет собран, но его ещё никто не запускал. Прогон печатает <b>два</b> блока: <code>STATS_JSON</code> — для оценки баланса на этом экране, и <code>DIAG_JSON</code> — для диагноста на следующем. Нужны оба: без второго часть из 50 тестов методички останется невыполненной.</p>
 
-        <form method="post" action="{{ url_for('balance_stats', doc_id=document.id, game_index=game_index) }}">
-            <label class="field">
-                <span class="field-label">STATS_JSON (список конфигураций)</span>
-                <textarea class="field-input mirror-textarea json-input" name="stats" rows="10"
-                          placeholder='[{"games": 2000, "num_players": 2, "win_rate_by_seat": {...}, ...}]' required></textarea>
-            </label>
-            <div class="mirror-form-actions">
-                <button class="btn btn-primary" type="submit">Загрузить статистику</button>
-                <span class="mirror-form-hint">Сервис ничего не выполняет — только читает числа.</span>
+        <div class="way-grid">
+            <div class="way-card way-main">
+                <div class="way-head"><span class="way-num">1</span> Прогнать у себя и вставить вывод</div>
+                <p class="way-note">Откройте <a href="https://www.online-python.com/" target="_blank" rel="noopener">online-python.com</a>, вставьте <a href="{{ url_for('skeleton_code', doc_id=document.id, game_index=game_index) }}">скачанный файл</a> целиком, нажмите Run — и скопируйте <b>весь вывод</b>. Разбирать его руками не нужно: сервис сам найдёт оба блока.</p>
+                <form method="post" action="{{ url_for('balance_stats', doc_id=document.id, game_index=game_index) }}">
+                    <label class="field">
+                        <span class="field-label">Вывод программы целиком</span>
+                        <textarea class="field-input mirror-textarea json-input" name="stats" rows="9"
+                                  placeholder="STATS_JSON  (для «Оценщика статистик» — формат v3, не менять)&#10;[{&quot;games&quot;: 2000, &quot;num_players&quot;: 2, ...}]&#10;&#10;DIAG_JSON  (для «Агента-диагноста»)&#10;{&quot;runs&quot;: [...]}" required></textarea>
+                    </label>
+                    <div class="mirror-form-actions">
+                        <button class="btn btn-primary" type="submit">Загрузить статистику</button>
+                        <span class="mirror-form-hint">Сервис ничего не выполняет — только читает числа.</span>
+                    </div>
+                </form>
             </div>
-        </form>
-    </div>
 
-    <details class="raw-toggle">
-        <summary>Или запустить скелет прямо здесь</summary>
-        <div class="raw-body">
-            <p class="dash-note">⚠️ Это выполнит на сервере код, <b>написанный языковой моделью</b>. Он запускается отдельным процессом, во временной папке, с таймаутом и без переменных с ключами API — но это не настоящая песочница: у процесса те же права, что у вас, включая доступ к файлам и сети. Пользуйтесь, только если доверяете содержимому скелета (его можно прочитать целиком на предыдущем экране).</p>
-            <form method="post" action="{{ url_for('balance_stats', doc_id=document.id, game_index=game_index) }}"
-                  id="run-local-form">
-                <input type="hidden" name="action" value="run_local">
-                <button class="btn btn-ghost" type="submit" id="run-local-btn">▶ Прогнать скелет локально</button>
-                <span class="cta-hint">2000 партий на конфигурацию — обычно занимает секунды, лимит 2 минуты</span>
-            </form>
+            <div class="way-card">
+                <div class="way-head"><span class="way-num">2</span> Запустить прямо здесь</div>
+                <p class="way-note">Быстрее и точно не потеряет DIAG_JSON. Но: это выполнит на сервере код, <b>написанный языковой моделью</b>. Он идёт отдельным процессом, во временной папке, с таймаутом и без ключей API — однако это не настоящая песочница: права у процесса те же, что у вас, включая файлы и сеть. Код можно прочитать целиком <a href="{{ url_for('skeleton', doc_id=document.id, game_index=game_index) }}">на предыдущем экране</a>.</p>
+                <form method="post" action="{{ url_for('balance_stats', doc_id=document.id, game_index=game_index) }}"
+                      id="run-local-form">
+                    <input type="hidden" name="action" value="run_local">
+                    <button class="btn btn-ghost" type="submit" id="run-local-btn">▶ Прогнать скелет локально</button>
+                    <span class="cta-hint">2000 партий на конфигурацию — обычно секунды, лимит 2 минуты</span>
+                </form>
+            </div>
         </div>
-    </details>
+    </div>
 
     {% else %}
     {# --- статистика есть -------------------------------------------------- #}
-    <div class="mirror-badge badge-ready">
-        📊 Статистика загружена
-        {%- if br.stats_source == 'local' %} (локальный прогон){% else %} (вставлена вручную){% endif -%}
-        : конфигураций — {{ (br.stats() or []) | length }}.
+    {% set n_ok = checks | selectattr('verdict', 'equalto', 'ok') | list | length %}
+    {% set n_warn = checks | selectattr('verdict', 'equalto', 'warn') | list | length %}
+    {% set n_bad = checks | selectattr('verdict', 'equalto', 'problem') | list | length %}
+    {% set crit = flags | selectattr('severity', 'equalto', 'critical')
+                        | rejectattr('confidence', 'equalto', 'assumed') | list %}
+
+    {# Один короткий ответ на вопрос «так что, баланс нормальный?» — до того,
+       как автор начнёт разбираться в шести проверках и флагах. #}
+    {% if rep %}
+    <div class="mirror-badge {{ 'badge-open' if crit or n_bad or not checks else 'badge-ready' }}">
+        {%- if crit %}⚠️ Найдено критичное: {{ crit | map(attribute='code') | join(', ') }} — это чинится до всего остального.
+        {%- elif n_bad %}⚠️ {{ plural(n_bad, 'проблема', 'проблемы', 'проблем') }} и {{ plural(n_warn, 'замечание', 'замечания', 'замечаний') }}. Критичного нет — правки можно планировать спокойно.
+        {%- elif n_warn %}✅ Проблем нет, есть {{ plural(n_warn, 'замечание', 'замечания', 'замечаний') }} — смотрите ниже.
+        {%- elif n_ok %}✅ Все {{ plural(n_ok, 'проверка', 'проверки', 'проверок') }} в норме.
+        {# Отчёт есть, а проверок в нём нет — это не «всё хорошо», а пустой
+           ответ агента: сказать «0 проверок в норме» значило бы соврать. #}
+        {%- else %}⚠️ Агент вернул отчёт без единой проверки — оценивать нечего. Стоит переоценить.{% endif -%}
+    </div>
+    {% endif %}
+
+    <div class="stat-strip">
+        <span class="stat-chip">📊 {{ plural((br.stats() or []) | length, 'конфигурация', 'конфигурации', 'конфигураций') }}</span>
+        <span class="stat-chip">{{ 'локальный прогон' if br.stats_source == 'local' else 'вставлено вручную' }}</span>
+        {# Наличие DIAG_JSON решает, сколько тестов сможет выполнить диагност, —
+           автору стоит знать это здесь, а не удивляться пачке n/a через экран. #}
+        {% if br.diag() %}
+        <span class="stat-chip stat-ok">✔ DIAG_JSON есть — диагност увидит все данные</span>
+        {% else %}
+        <span class="stat-chip stat-miss">➖ DIAG_JSON нет — часть тестов диагноста будет пропущена</span>
+        {% endif %}
     </div>
 
     {# Разложение считает код, а не модель: именно на этой арифметике прошлая
@@ -83,12 +117,14 @@
             <div class="comp-row comp-head bd-row">
                 <span>Игроков</span><span>Без победителя</span><span>из них ничьи</span><span>истинная недостижимость</span>
             </div>
+            {# data-l дублирует заголовок столбца: на узком экране шапка
+               скрывается, и без подписи четыре процента подряд не читаются. #}
             {% for b in breakdown %}
             <div class="comp-row bd-row">
-                <span class="comp-name">{{ b.num_players }}</span>
-                <span>{{ '%.1f' % (b.no_winner_rate * 100) }}%</span>
-                <span>{{ '%.1f' % (b.tie_share * 100) }}%</span>
-                <span class="{{ 'bd-bad' if b.unreachable_total > 0.15 else '' }}">{{ '%.1f' % (b.unreachable_total * 100) }}%</span>
+                <span class="comp-name" data-l="Игроков">{{ b.num_players }}</span>
+                <span data-l="Без победителя">{{ '%.1f' % (b.no_winner_rate * 100) }}%</span>
+                <span data-l="из них ничьи">{{ '%.1f' % (b.tie_share * 100) }}%</span>
+                <span data-l="истинная недостижимость" class="{{ 'bd-bad' if b.unreachable_total > 0.15 else '' }}">{{ '%.1f' % (b.unreachable_total * 100) }}%</span>
             </div>
             {% endfor %}
         </div>
@@ -101,13 +137,25 @@
 
     {% if rep %}
         {% set scores = rep.get('scores') or {} %}
+        {% macro score_bar(title, value) %}
+        <div class="sbar">
+            <div class="sbar-top">
+                <span class="sbar-name">{{ title }}</span>
+                <span class="sbar-val {{ 'sv-bad' if value is number and value < 4 else ('sv-warn' if value is number and value < 7 else 'sv-ok') }}">{{ value if value is not none else '—' }}<span class="score-max">/10</span></span>
+            </div>
+            <div class="sbar-track">
+                <div class="sbar-fill {{ 'sf-bad' if value is number and value < 4 else ('sf-warn' if value is number and value < 7 else 'sf-ok') }}"
+                     style="width: {{ (value * 10) if value is number else 0 }}%"></div>
+            </div>
+        </div>
+        {% endmacro %}
         <div class="mcard mcard-accent">
             <div class="mcard-title">📈 Баллы</div>
-            <div class="spec-grid">
-                <div class="spec-item"><span class="spec-k">Баланс</span><span class="spec-v score-big">{{ scores.get('balance', '—') }}<span class="score-max">/10</span></span></div>
-                <div class="spec-item"><span class="spec-k">Достижимость победы</span><span class="spec-v score-big">{{ scores.get('win_reachability', '—') }}<span class="score-max">/10</span></span></div>
-                <div class="spec-item"><span class="spec-k">Режим чтения</span><span class="spec-v">{{ rep.get('mode') or '—' }}</span></div>
-                <div class="spec-item"><span class="spec-k">Конфигурации</span><span class="spec-v">{{ (rep.get('configs_analyzed') or []) | join(', ') or '—' }}</span></div>
+            {{ score_bar('Баланс', scores.get('balance')) }}
+            {{ score_bar('Достижимость победы', scores.get('win_reachability')) }}
+            <div class="spec-line">
+                <span class="chip-mini">режим: {{ rep.get('mode') or '—' }}</span>
+                <span class="chip-mini">игроков: {{ (rep.get('configs_analyzed') or []) | join(', ') or '—' }}</span>
             </div>
             {% if rep.get('score_rationale') %}
             <div class="qa-why">{{ rep['score_rationale'] }}</div>
@@ -116,7 +164,9 @@
 
         {% if checks %}
         <div class="mcard">
-            <div class="mcard-title">🔍 Шесть проверок</div>
+            <div class="mcard-title">🔍 Шесть проверок
+                <span class="mcard-count">{{ n_ok }} в норме · {{ plural(n_warn, 'замечание', 'замечания', 'замечаний') }} · {{ plural(n_bad, 'проблема', 'проблемы', 'проблем') }}</span>
+            </div>
             <div class="map-grid">
                 {% for ch in checks %}
                 {% set vm = verdict_meta.get(ch.get('verdict'), ('•', 'st-warn', ch.get('verdict'))) %}
@@ -158,9 +208,8 @@
         {% endif %}
 
         {# Авто-редизайн предлагается ТОЛЬКО при критичных флагах: менять
-           параметры игры без критичной находки незачем. Условие считает код. #}
-        {% set crit = flags | selectattr('severity', 'equalto', 'critical')
-                            | rejectattr('confidence', 'equalto', 'assumed') | list %}
+           параметры игры без критичной находки незачем. Условие считает код,
+           `crit` посчитан выше — там же, где сводка вердикта. #}
         {% if crit %}
         <div class="mcard mcard-warn">
             <div class="mcard-title">🔧 Можно починить автоматически</div>
@@ -232,6 +281,9 @@
         {% endif %}
 
         <div class="next-stage-cta">
+            {# Диагност идёт следом и ссылается на эти вердикты через covered_tests,
+               поэтому переход показываем всегда — независимо от критичных флагов. #}
+            <a class="btn btn-primary" href="{{ url_for('diagnost', doc_id=document.id, game_index=game_index) }}">🔬 Диагностика: {{ 50 }} тестов методички →</a>
             <a class="btn btn-ghost btn-sm" href="{{ url_for('balance_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать Finding_balance.json</a>
             <form method="post" action="{{ url_for('balance_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
                 <button class="btn btn-ghost btn-sm" type="submit" id="retry-btn">↻ Переоценить</button>

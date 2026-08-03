@@ -70,6 +70,26 @@ def load_redesigner_prompt() -> str:
     return _read(os.path.join(_PROMPTS_DIR, "redesigner.md"))
 
 
+def load_diagnost_prompt() -> str:
+    """Системный промпт агента «Диагност» (исполнитель методички, два прохода)."""
+    return _read(os.path.join(_PROMPTS_DIR, "diagnost.md"))
+
+
+def load_synthesizer_prompt() -> str:
+    """Системный промпт агента «Синтезатор оценки» (финал: три отчёта → балл)."""
+    return _read(os.path.join(_PROMPTS_DIR, "synthesizer.md"))
+
+
+def load_balance_methodology() -> str:
+    """Методичка балансной верификации — ОТДЕЛЬНЫЙ документ в user-сообщении.
+
+    Не вшита в промпт намеренно: методичка правится чаще промпта, и вшивание
+    означало бы риск разъезда версий между тем, что редактируют, и тем, что
+    исполняется. Тот же приём, что с шаблоном скелета у симуляциониста.
+    """
+    return _read(os.path.join(_PROMPTS_DIR, "balance_methodology.md"))
+
+
 # --- сборка фактов этапов 1-2 в текст --------------------------------------
 def _format_stage1(stage1: dict) -> str:
     if not stage1:

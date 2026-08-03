@@ -174,11 +174,63 @@
         </div>
     {% endif %}
 
+    {# Самопроверка стоит ПОСЛЕ обеих веток: самое тяжёлое её замечание —
+       «ответ пришёл без машинного блока», а в этом случае структурного вида
+       нет вовсе, и внутри него карточка бы просто не отрисовалась. #}
+    {% if ms.issues() %}
+    <div class="mcard {{ 'mcard-warn' if ms.blocking_issues else '' }}">
+        <div class="mcard-title">🧪 Самопроверка сверки <span class="mcard-count">{{ ms.issues() | length }}</span></div>
+        <p class="dash-note">Дороже всего здесь стоит незаданный вопрос: карта выглядит полной, автор соглашается, а через несколько шагов проверки по этому узлу молча уходят в «не выполнено». Поэтому список вопросов сверяет код.</p>
+        <ul class="gap-list">
+            {% for i in ms.issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head">
+                    <code>{{ i.get('code') }}</code>
+                    {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+        {% if ms.phase == 'mirror' %}
+        <p class="desc-hint">Если агент что-то не спросил, а вы знаете ответ — напишите его в поле ниже сами: уточнение автора приоритетнее исходного текста.</p>
+        {% endif %}
+        {% if ms.blocking_issues %}
+        <div class="accept-actions">
+            <form method="post" action="{{ url_for('mirror_retry', doc_id=document.id, game_index=game_index) }}" id="retry-form">
+                <button class="btn btn-ghost btn-sm" type="submit" id="retry-btn">↻ Прогнать проход заново</button>
+            </form>
+            <span class="cta-hint">тот же раунд, ваш ответ сохранится — лимит раундов не тратится</span>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
     {% if ms.phase == 'mirror' %}
+    {% set qs = (data or {}).get('questions') or [] %}
     <form class="mirror-reply-form" id="reply-form" method="post" action="{{ url_for('mirror_reply', doc_id=document.id, game_index=game_index) }}">
+        {# Вопросы дублируем прямо здесь: карта понимания длинная, и без этого
+           автор отвечает вслепую или крутит страницу вверх на каждый пункт. #}
+        {% if qs %}
+        <div class="reply-qs">
+            <div class="reply-qs-title">Вопросы, на которые ждём ответ <span class="mcard-count">{{ qs | length }}</span></div>
+            <ol class="reply-qs-list">
+                {% for q in qs %}
+                <li>
+                    {{ q['question'] }}
+                    {% if q['why'] %}<span class="reply-qs-why">{{ q['why'] }}</span>{% endif %}
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+        {% endif %}
         <label class="field">
             <span class="field-label">Ваш ответ агенту</span>
-            <textarea class="field-input mirror-textarea" name="answer" rows="7" placeholder="Ответьте на вопросы выше (можно по номерам). Если считаете, что всё уже ясно — так и напишите." required>{{ ms.author_answer or '' }}</textarea>
+            {# Поле пустое: прошлый ответ уже показан выше, в «Ваши уточнения
+               учтены», а подставленный сюда текст автор в новом раунде стирал
+               вручную, приняв его за свой черновик. #}
+            <textarea class="field-input mirror-textarea" name="answer" rows="8" required
+                      placeholder="{% if qs %}Удобно отвечать по номерам:&#10;{% for q in qs %}{{ loop.index }}. &#10;{% endfor %}&#10;{% else %}Ответьте на вопросы выше.&#10;{% endif %}Не знаете ответ — так и напишите, это лучше выдумки. Считаете, что всё уже ясно — тоже напишите."></textarea>
         </label>
         <div class="mirror-form-actions">
             <button class="btn btn-primary" type="submit" id="reply-submit">Отправить ответ агенту</button>
@@ -192,12 +244,15 @@
 // Проход агента сервер обрабатывает синхронно и может занимать до минуты —
 // без этой подсказки страница в этот момент выглядит зависшей.
 (function () {
-    var form = document.getElementById("reply-form");
-    if (!form) return;
-    form.addEventListener("submit", function () {
-        var btn = document.getElementById("reply-submit");
-        btn.disabled = true;
-        btn.textContent = "Агент отвечает… (обычно до минуты)";
+    [["reply-form", "reply-submit", "Агент отвечает… (обычно до минуты)"],
+     ["retry-form", "retry-btn", "Агент читает заново…"]].forEach(function (p) {
+        var form = document.getElementById(p[0]);
+        var btn = document.getElementById(p[1]);
+        if (!form || !btn) return;
+        form.addEventListener("submit", function () {
+            btn.disabled = true;
+            btn.textContent = p[2];
+        });
     });
 })();
 </script>

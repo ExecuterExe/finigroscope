@@ -132,6 +132,10 @@ class MirrorSession(db.Model):
     # нет. Без отдельного поля извлеченец не получил бы статусы absent и заново
     # угадывал бы «механики нет» против «не описано».
     map_json = db.Column(db.Text, nullable=True)
+    # Замечания самопроверки к последнему проходу. Главное из них — незаданный
+    # вопрос о компонентах: он ничем себя не выдаёт, а через четыре шага гасит
+    # целую группу проверок баланса артефактов.
+    issues_json = db.Column(db.Text, nullable=True)
     error = db.Column(db.Text, nullable=True)           # причина, если LLM недоступен
     ready_to_proceed = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -173,6 +177,18 @@ class MirrorSession(db.Model):
         """Карта узлов со статусами ok/unclear/missing/absent (может быть пустой)."""
         import json
         return json.loads(self.map_json) if self.map_json else []
+
+    def issues(self):
+        import json
+        return json.loads(self.issues_json) if self.issues_json else []
+
+    @property
+    def blocking_issues(self):
+        return [i for i in self.issues() if i.get("severity") == "error"]
+
+    def questions(self) -> list:
+        """Вопросы последнего прохода — их показывают и рядом с формой ответа."""
+        return ((self.last_json_dict() or {}).get("questions")) or []
 
     def gate2_json_dict(self):
         import json
@@ -386,6 +402,187 @@ class BalanceReport(db.Model):
         return bool(self.stats_json)
 
 
+class DiagnosisReport(db.Model):
+    """Отчёт агента-диагноста: исполнение методички балансной верификации.
+
+    Агент двухпроходный, и оба прохода хранятся раздельно: между ними
+    оркестратор исполняет заказанные прогоны, и триаж нужен на входе второго
+    прохода. Перезапускать первый проход при повторном заходе не обязательно —
+    решение принимает оркестратор, а не модель.
+    """
+
+    __tablename__ = "diagnosis_reports"
+
+    PHASE_NONE = "none"          # ещё не запускали
+    PHASE_TRIAGE = "triage"      # триаж сделан, прогоны не исполнены
+    PHASE_DONE = "done"          # вердикты получены
+
+    MAX_ATTEMPTS = 3             # цикл ремонта ведёт оркестратор
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
+    game_index = db.Column(db.Integer, nullable=False, default=1)
+    phase = db.Column(db.String(16), nullable=False, default=PHASE_NONE)
+    attempt_number = db.Column(db.Integer, nullable=False, default=1)
+
+    triage_json = db.Column(db.Text, nullable=True)          # выход прохода 1
+    triage_issues_json = db.Column(db.Text, nullable=True)
+    # Что реально заказано и что обрезано бюджетом. Обрезанное хранится, потому
+    # что его тесты обязаны получить честный n/a: budget_exceeded, а не исчезнуть.
+    kept_requests_json = db.Column(db.Text, nullable=True)
+    dropped_requests_json = db.Column(db.Text, nullable=True)
+    extra_runs_json = db.Column(db.Text, nullable=True)       # результаты доп. прогонов
+    runs_error = db.Column(db.Text, nullable=True)
+
+    findings_json = db.Column(db.Text, nullable=True)         # выход прохода 2
+    issues_json = db.Column(db.Text, nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    document = db.relationship("Document", backref="diagnosis_reports")
+
+    __table_args__ = (
+        db.UniqueConstraint("document_id", "game_index", name="uq_diagnosis_doc_game"),
+    )
+
+    def _load(self, raw, default=None):
+        import json
+        return json.loads(raw) if raw else default
+
+    def triage(self):
+        return self._load(self.triage_json)
+
+    def triage_issues(self):
+        return self._load(self.triage_issues_json, [])
+
+    def kept_requests(self):
+        return self._load(self.kept_requests_json, [])
+
+    @property
+    def budget_used(self) -> int:
+        """Фактически исполненные прогоны, а не заявленное агентом число."""
+        return len(self.kept_requests())
+
+    @property
+    def budget_limit(self) -> int:
+        from review.diagnost import BUDGET_LIMIT
+        return BUDGET_LIMIT
+
+    def dropped_requests(self):
+        return self._load(self.dropped_requests_json, [])
+
+    def extra_runs(self):
+        return self._load(self.extra_runs_json)
+
+    def findings(self):
+        return self._load(self.findings_json)
+
+    def issues(self):
+        return self._load(self.issues_json, [])
+
+    @property
+    def blocking_issues(self):
+        return [i for i in self.issues() if i.get("severity") == "error"]
+
+    @property
+    def critical_flags(self):
+        return (self.findings() or {}).get("critical_flags") or []
+
+    @property
+    def coverage(self):
+        return (self.findings() or {}).get("coverage_summary") or {}
+
+    @property
+    def unmeasured_count(self) -> int:
+        """Сколько тестов НЕ выполнено по причинам, которые не значат «всё хорошо».
+
+        `mechanic_absent` сюда не входит: механики нет — проверять нечего.
+        Остальные четыре причины означают «не измерено», и это обязано доехать
+        до финального отчёта, а не раствориться в общем «претензий нет».
+        """
+        br = (self.coverage.get("n_a_breakdown") or {})
+        return sum(int(br.get(k) or 0) for k in
+                   ("no_data", "method_blind", "search_incomplete", "budget_exceeded"))
+
+
+class SynthesisReport(db.Model):
+    """Финальный отчёт: общий балл, надёжность оценки и решение о ревизии.
+
+    Записей на игру несколько — по одной на итерацию. Хранить только последнюю
+    нельзя: смысл цикла в том, поднялся ли балл после правки, а без предыдущего
+    значения этого не видно ни автору, ни коду (агент получает `previous_score`
+    на вход и обязан сказать, что изменилось).
+
+    Оркестратор читает отсюда `revision_required`, а НЕ сам балл: игра может
+    набрать проходные 6.4 и при этом иметь незакрытую эксплойт-петлю.
+    """
+
+    __tablename__ = "synthesis_reports"
+
+    # Бюджет кругов «синтез → авто-редизайн → пересчёт» — тот же счётчик, что у
+    # авто-редизайнера (RedesignAttempt.MAX_ACCEPTED_ATTEMPTS): круг делает он.
+    # Держать здесь второе число значило бы завести второй бюджет на один цикл.
+    MAX_REVISIONS = 3
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
+    game_index = db.Column(db.Integer, nullable=False, default=1)
+    attempt_number = db.Column(db.Integer, nullable=False, default=1)
+
+    result_json = db.Column(db.Text, nullable=True)      # весь ответ агента
+    reference_json = db.Column(db.Text, nullable=True)   # эталонный расчёт кода
+    issues_json = db.Column(db.Text, nullable=True)      # расхождения с эталоном
+    # Дублируем в колонки то, по чему ходит оркестратор и что показывается в
+    # списках: иначе каждый переход по конвейеру разбирает JSON целиком.
+    overall_score = db.Column(db.Float, nullable=True)
+    score_confidence = db.Column(db.String(16), nullable=True)
+    revision_required = db.Column(db.Boolean, nullable=False, default=False)
+    error = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    document = db.relationship("Document", backref="synthesis_reports")
+
+    __table_args__ = (
+        db.UniqueConstraint("document_id", "game_index", "attempt_number",
+                            name="uq_synthesis_doc_game_attempt"),
+    )
+
+    def _load(self, raw, default=None):
+        import json
+        return json.loads(raw) if raw else default
+
+    def result(self):
+        return self._load(self.result_json)
+
+    def reference(self):
+        return self._load(self.reference_json)
+
+    def issues(self):
+        return self._load(self.issues_json, [])
+
+    @property
+    def blocking_issues(self):
+        return [i for i in self.issues() if i.get("severity") == "error"]
+
+    @property
+    def report_md(self) -> str:
+        return (self.result() or {}).get("report_md") or ""
+
+    @property
+    def categories(self) -> list:
+        return (self.result() or {}).get("categories") or []
+
+    @property
+    def top_priorities(self) -> list:
+        return (self.result() or {}).get("top_priorities") or []
+
+    @property
+    def revision_reason(self) -> list:
+        return (self.result() or {}).get("revision_reason") or []
+
+
 class RedesignAttempt(db.Model):
     """Попытка авто-редизайна: одна правка структуры по найденным недочётам.
 
@@ -401,8 +598,17 @@ class RedesignAttempt(db.Model):
 
     __tablename__ = "redesign_attempts"
 
-    # Цикл ведёт оркестратор под счётчиком попыток — агент круг не решает.
-    MAX_ATTEMPTS = 3
+    # Два НЕЗАВИСИМЫХ бюджета, и смешивать их нельзя.
+    #
+    # MAX_ACCEPTED_ATTEMPTS — сколько раз игре позволено измениться. Это бюджет
+    # правок структуры: цикл ведёт оркестратор, агент круг не решает.
+    #
+    # MAX_PROPOSALS — сколько предложений вообще разрешено сгенерировать, любого
+    # статуса. Это потолок расходов на модель. Считать отказы в первый бюджет
+    # было бы наказанием за разборчивость: автор, отклонивший три неудачных
+    # предложения, остался бы без права на ремонт вовсе.
+    MAX_ACCEPTED_ATTEMPTS = 3
+    MAX_PROPOSALS = 6
 
     STATUS_PROPOSED = "proposed"   # предложено, автор ещё не решил
     STATUS_ACCEPTED = "accepted"   # применено к структуре
@@ -428,6 +634,20 @@ class RedesignAttempt(db.Model):
         db.UniqueConstraint("document_id", "game_index", "attempt_number",
                             name="uq_redesign_doc_game_attempt"),
     )
+
+    @classmethod
+    def next_attempt_number(cls, document_id, game_index) -> int:
+        """Следующий номер попытки: максимальный существующий + 1.
+
+        Номер — это идентификатор записи, а не счётчик бюджета. Пока их считали
+        одним числом («принятых + 1»), отклонённая попытка занимала номер, и
+        следующее предложение падало на уникальном индексе: отказ автора от
+        правки ломал сервис.
+        """
+        from sqlalchemy import func
+        current = db.session.query(func.max(cls.attempt_number)).filter_by(
+            document_id=document_id, game_index=game_index).scalar()
+        return (current or 0) + 1
 
     def result(self):
         import json

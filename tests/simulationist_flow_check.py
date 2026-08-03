@@ -70,11 +70,7 @@ class MockProvider(LLMProvider):
                                          "hand_snapshot": False, "state_signature": True,
                                          "clone_state": True, "win_path": True}}
                 return (json.dumps(meta, ensure_ascii=False)
-                        + "
-
-```python
-" + FILLED_CODE + "
-```")
+                        + "\n\n```python\n" + FILLED_CODE + "\n```")
             data = {"simulatable": False,
                     "reason": "в core нет условия победы — непонятно, когда партия выиграна",
                     "missing": ["win_condition"]}

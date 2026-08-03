@@ -478,8 +478,44 @@ a { color: var(--accent-soft); text-decoration: none; }
 /* --- отчёт о балансе (Finding_balance) ------------------------------------- */
 .score-big { font-size: 1.5rem; font-weight: 800; }
 .score-max { font-size: 0.8rem; font-weight: 600; color: var(--text-dim); }
-.bd-row { grid-template-columns: 0.6fr 1fr 1fr 1.4fr; }
 .bd-bad { color: #ff9a9a; font-weight: 700; }
+
+/* Полоса балла: число «7 из 10» само по себе не читается — глазу нужна шкала,
+   чтобы понять, это «почти хорошо» или «еле-еле». */
+.sbar { margin: 12px 0; }
+.sbar-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.sbar-name { font-size: 0.92rem; color: var(--text-dim); }
+.sbar-val { font-size: 1.35rem; font-weight: 800; }
+.sv-ok { color: #7ee0a8; } .sv-warn { color: #ffd47a; } .sv-bad { color: #ff9a9a; }
+.sbar-track { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; }
+.sbar-fill { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
+.sf-ok { background: linear-gradient(90deg, #4d9fff, #7ee0a8); }
+.sf-warn { background: linear-gradient(90deg, #ffb347, #ffd47a); }
+.sf-bad { background: linear-gradient(90deg, #ff6f6f, #ff9a9a); }
+
+/* Строка-сводка о самих данных: откуда взяты и полны ли они */
+.stat-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+.stat-chip {
+    padding: 5px 12px; border-radius: 999px; font-size: 0.85rem;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--card-border);
+    color: var(--text-dim);
+}
+.stat-ok { color: #7ee0a8; border-color: rgba(126,224,168,0.35); background: rgba(126,224,168,0.08); }
+.stat-miss { color: #ffd47a; border-color: rgba(255,196,80,0.35); background: rgba(255,196,80,0.07); }
+
+/* Два способа дать статистику — рядом, а не один в раскрывашке: спрятанный
+   вариант был единственным, который отдаёт DIAG_JSON, и его не находили. */
+.way-grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; margin-top: 14px; align-items: start; }
+.way-card { padding: 16px 18px; border-radius: 12px; background: rgba(0,0,0,0.14); border: 1px solid var(--card-border); }
+.way-main { background: rgba(77,159,255,0.06); border-color: rgba(77,159,255,0.28); }
+.way-head { display: flex; align-items: center; gap: 9px; font-weight: 700; margin-bottom: 8px; }
+.way-num {
+    display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+    border-radius: 50%; background: rgba(77,159,255,0.18); color: var(--accent-soft);
+    font-size: 0.8rem; font-weight: 700;
+}
+.way-note { color: var(--text-dim); line-height: 1.55; font-size: 0.9rem; margin: 0 0 12px; }
+@media (max-width: 860px) { .way-grid { grid-template-columns: 1fr; } }
 .json-input { font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
 .sev-critical { background: rgba(255,111,111,0.16); border-color: rgba(255,111,111,0.45); color: #ff9a9a; }
 .sev-major { background: rgba(255,196,80,0.14); border-color: rgba(255,196,80,0.42); color: #ffd47a; }
@@ -585,9 +621,24 @@ a { color: var(--accent-soft); text-decoration: none; }
     padding: 20px 22px; border-radius: 16px;
     background: var(--card); border: 1px solid var(--card-border);
 }
-.mirror-textarea { resize: vertical; min-height: 130px; font-family: inherit; }
+.mirror-textarea { resize: vertical; min-height: 150px; font-family: inherit; }
 .mirror-form-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .mirror-form-hint { color: var(--text-dim); font-size: 0.85rem; }
+
+/* Напоминание о вопросах внутри формы ответа. Мелко и компактно — это не
+   вторая копия карточки вопросов, а шпаргалка под рукой, чтобы не крутить
+   страницу вверх на каждый пункт. */
+.reply-qs {
+    padding: 12px 14px; border-radius: 12px;
+    background: rgba(77,159,255,0.06); border: 1px solid rgba(77,159,255,0.22);
+}
+.reply-qs-title {
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.4px;
+    color: var(--text-dim); margin-bottom: 8px;
+}
+.reply-qs-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; }
+.reply-qs-list li { font-size: 0.87rem; line-height: 1.5; }
+.reply-qs-why { display: block; color: var(--text-dim); font-size: 0.8rem; margin-top: 2px; }
 
 /* предел раундов уточнений */
 .round-note {
@@ -628,6 +679,18 @@ a { color: var(--accent-soft); text-decoration: none; }
 .comp-qty { color: var(--accent-soft); }
 .comp-fn { color: var(--text-dim); line-height: 1.5; }
 
+/* Сетки-наследники .comp-row стоят ПОСЛЕ неё: специфичность одинаковая, и
+   трёхколоночная сетка .comp-row перебила бы их, окажись они выше по файлу
+   (именно так и было — .bd-row молча схлопывалась в три колонки). */
+.bd-row { grid-template-columns: 0.7fr 1fr 1fr 1.4fr; }
+.cat-row { grid-template-columns: 2.6fr 0.7fr 0.7fr 0.8fr; }
+/* N/A приглушено, но НЕ спрятано: читатель должен видеть, что категорию не
+   оценивали, а не гадать, почему её нет в списке. Ноль и «не измеряли» —
+   разные вещи, и на экране они тоже обязаны выглядеть по-разному. */
+.cat-row.cat-na { opacity: 0.66; }
+.cat-na-note { grid-column: 2 / -1; color: var(--text-dim); font-size: 0.85rem; }
+.cat-total { background: rgba(77,159,255,0.09); border-color: rgba(77,159,255,0.32); }
+
 /* пробелы и неоднозначности */
 .gap-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .gap-item { padding: 12px 14px; border-radius: 11px; background: rgba(0,0,0,0.14); border: 1px solid var(--card-border); }
@@ -661,6 +724,12 @@ a { color: var(--accent-soft); text-decoration: none; }
 @media (max-width: 640px) {
     .comp-row { grid-template-columns: 1fr; gap: 4px; }
     .comp-head { display: none; }
+    /* Шапка спрятана — значит, ячейка обязана назвать себя сама. Иначе строка
+       превращается в столбик из четырёх процентов без единой подписи. */
+    .comp-row [data-l]::before {
+        content: attr(data-l) ": "; color: var(--text-dim); font-size: 0.82rem;
+    }
+    .cat-row { grid-template-columns: 1fr; }
 }
 
 /* ---------- constructor ---------- */

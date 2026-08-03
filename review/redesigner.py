@@ -77,28 +77,40 @@ def actionable_flags(finding_balance: dict) -> list:
             if f.get("confidence") != "assumed" and f.get("code") not in NEVER_AUTO]
 
 
-def should_trigger(finding_balance: dict) -> dict:
+def should_trigger(finding_balance: dict, synthesis: dict = None) -> dict:
     """Нужен ли вызов авто-редизайнера и почему. Решение принимает код.
 
-    Возвращает {"trigger": bool, "reason": str, "critical": [...]}.
+    Возвращает {"trigger": bool, "reason": str, "critical": [...], "mode": str}.
+
+    Два независимых повода. Первый — критичный флаг баланса (режим A): сломана
+    конкретная механика. Второй — вердикт синтезатора `revision_required`
+    (режим B): игра может не иметь ни одного критичного флага и всё равно не
+    добирать проходного балла из-за накопленных мелких проблем. Пропустить
+    второй повод значило бы объявить такую игру готовой.
     """
     crit = critical_flags(finding_balance)
     if crit:
         codes = ", ".join(sorted({f.get("code") for f in crit if f.get("code")}))
-        return {"trigger": True, "critical": crit,
+        return {"trigger": True, "critical": crit, "mode": MODE_A,
                 "reason": f"есть критичные флаги: {codes}"}
+
+    if (synthesis or {}).get("revision_required"):
+        reasons = (synthesis or {}).get("revision_reason") or []
+        tail = ": " + "; ".join(str(r) for r in reasons) if reasons else ""
+        return {"trigger": True, "critical": [], "mode": MODE_B,
+                "reason": f"синтезатор требует ревизии{tail}"}
 
     flags = (finding_balance or {}).get("flags") or []
     assumed_crit = [f for f in flags
                     if f.get("severity") == "critical" and f.get("confidence") == "assumed"]
     if assumed_crit:
-        return {"trigger": False, "critical": [],
+        return {"trigger": False, "critical": [], "mode": None,
                 "reason": "критичные флаги есть, но все на «мягких» числах — "
                           "правка по артефакту допущения запрещена, находки идут в рекомендации"}
     if flags:
-        return {"trigger": False, "critical": [],
+        return {"trigger": False, "critical": [], "mode": None,
                 "reason": "критичных флагов нет — правка структуры не требуется"}
-    return {"trigger": False, "critical": [], "reason": "флагов нет"}
+    return {"trigger": False, "critical": [], "mode": None, "reason": "флагов нет"}
 
 
 def detect_mode(finding_balance: dict = None, findings_diagnost: list = None,
