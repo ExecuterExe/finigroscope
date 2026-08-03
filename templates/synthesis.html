@@ -16,7 +16,7 @@
 
 <section class="mirror-screen">
     <div class="mirror-head">
-        <a class="back-link" href="{{ url_for('diagnost', doc_id=document.id, game_index=game_index) }}">← к диагносту</a>
+        <a class="back-link" href="{{ url_for('lenses', doc_id=document.id, game_index=game_index) }}">← к оценке по линзам</a>
         <h1>Итоговая оценка игры</h1>
         <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}{% if sr.attempt_number > 1 %} · итерация {{ sr.attempt_number }}{% endif %}</p>
         <p class="mirror-intro">Последний шаг. Синтезатор ничего не оценивает заново — он сводит оценки числового анализа и диагноста в один балл, честно считает, какая доля проверки не выполнена, и пишет отчёт автору. Балл собирается по формуле, которую можно пересчитать вручную по таблице ниже.</p>

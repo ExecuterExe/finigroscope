@@ -506,6 +506,66 @@ class DiagnosisReport(db.Model):
                    ("no_data", "method_blind", "search_incomplete", "budget_exceeded"))
 
 
+class LensReport(db.Model):
+    """Качественная оценка игры по линзам Шелла (Findings_lenses.json).
+
+    Пятый шаг ветки анализа, между диагностом и синтезатором. Одна запись на
+    (document_id, game_index), как у зеркала и структуры: оценка относится к
+    текущей версии игры, и после принятой правки авто-редизайнера сбрасывается
+    вместе со скелетом, статистикой и вердиктами диагноста.
+
+    Хранится ВЕСЬ ответ агента (с обоснованием каждой линзы), а не только срез
+    для синтезатора: обоснования — это единственное место во всём конвейере,
+    где сказано, ПОЧЕМУ игра оценена так, а не иначе, и автору они нужны
+    больше, чем сами числа.
+    """
+
+    __tablename__ = "lens_reports"
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
+    game_index = db.Column(db.Integer, nullable=False, default=1)
+
+    result_json = db.Column(db.Text, nullable=True)   # весь ответ агента
+    issues_json = db.Column(db.Text, nullable=True)   # замечания самопроверки
+    error = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    document = db.relationship("Document", backref="lens_reports")
+
+    __table_args__ = (
+        db.UniqueConstraint("document_id", "game_index", name="uq_lenses_doc_game"),
+    )
+
+    def _load(self, raw, default=None):
+        import json
+        return json.loads(raw) if raw else default
+
+    def result(self):
+        return self._load(self.result_json)
+
+    def issues(self):
+        return self._load(self.issues_json, [])
+
+    @property
+    def blocking_issues(self):
+        return [i for i in self.issues() if i.get("severity") == "error"]
+
+    @property
+    def categories(self) -> list:
+        return (self.result() or {}).get("categories") or []
+
+    @property
+    def scored_categories(self) -> int:
+        """Сколько категорий реально получили балл — остальные честно N/A."""
+        return len([c for c in self.categories if not c.get("na")])
+
+    @property
+    def playtest_recommended(self) -> bool:
+        return bool((self.result() or {}).get("playtest_recommended"))
+
+
 class SynthesisReport(db.Model):
     """Финальный отчёт: общий балл, надёжность оценки и решение о ревизии.
 

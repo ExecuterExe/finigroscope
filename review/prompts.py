@@ -75,6 +75,16 @@ def load_diagnost_prompt() -> str:
     return _read(os.path.join(_PROMPTS_DIR, "diagnost.md"))
 
 
+def load_lenses_prompt() -> str:
+    """Системный промпт агента «Оценщик по линзам Шелла» + справочник 100 линз.
+
+    Справочник вшит в тот же файл намеренно: промпт прямо ссылается на него
+    («полные формулировки — в справочнике в конце промпта»), и разносить их по
+    двум файлам значило бы завести пару, которая рано или поздно разъедется.
+    """
+    return _read(os.path.join(_PROMPTS_DIR, "lenses.md"))
+
+
 def load_synthesizer_prompt() -> str:
     """Системный промпт агента «Синтезатор оценки» (финал: три отчёта → балл)."""
     return _read(os.path.join(_PROMPTS_DIR, "synthesizer.md"))

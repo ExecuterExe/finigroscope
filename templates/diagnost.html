@@ -262,14 +262,18 @@
     {% endif %}
 
     <div class="next-stage-cta">
-        <a class="btn btn-primary" href="{{ url_for('synthesis', doc_id=document.id, game_index=game_index) }}">К итоговой оценке →</a>
+        {% if route and route.lenses_ready %}
+        <a class="btn btn-primary" href="{{ url_for('lenses', doc_id=document.id, game_index=game_index) }}">К оценке по линзам →</a>
+        {% else %}
+        <a class="btn btn-primary" href="{{ url_for('redesign', doc_id=document.id, game_index=game_index) }}">К авто-редизайну →</a>
+        {% endif %}
         <a class="btn btn-ghost btn-sm" href="{{ url_for('diagnost_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать Findings_diagnost.json</a>
         <form method="post" action="{{ url_for('diagnost_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
             <button class="btn btn-ghost btn-sm" type="submit">↻ Прогнать заново</button>
         </form>
         <span class="cta-hint">
-            {%- if route and route.lenses_ready %}содержательная оценка по линзам пока не реализована — её категории уйдут в итог как «не оценивались»
-            {%- else %}сначала ремонт критичного, потом итоговый балл{% endif -%}
+            {%- if route and route.lenses_ready %}дальше — содержательная оценка замысла, потом итоговый балл
+            {%- else %}сначала ремонт критичного, потом содержательная оценка{% endif -%}
         </span>
     </div>
     {% endif %}

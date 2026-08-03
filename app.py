@@ -36,6 +36,7 @@ from models import (
     Document,
     GameSkeleton,
     GameSpec,
+    LensReport,
     MirrorSession,
     RedesignAttempt,
     Report,
@@ -45,6 +46,7 @@ from models import (
 )
 from review import diagnost as diagnost_agent
 from review import extractor as extractor_agent
+from review import lens_evaluator as lens_agent
 from review import llm_provider, llm_settings
 from review import mirror as mirror_agent
 from review import redesigner as redesign_agent
@@ -1164,6 +1166,121 @@ def _run_findings(document, game_index, br, sk, dr, extra_runs):
     dr.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
 
 
+@app.route("/documents/<int:doc_id>/lenses/<int:game_index>")
+@login_required
+def lenses(doc_id, game_index):
+    """Оценщик по линзам Шелла — качественная оценка игры (шаг 6).
+
+    Единственный шаг конвейера, который читает игру как игру, а не как набор
+    чисел. Запускается сам при первом заходе, но только если диагност не оставил
+    незакрытых критичных находок: пока игру чинят, оценивать её замысел рано.
+    """
+    document = _owned_document(doc_id)
+    dr, lr = _lenses_context(doc_id, game_index)
+
+    gate = lens_agent.should_run(dr.findings())
+    if gate["ready"] and lr.result_json is None and not lr.error:
+        _run_lenses(document, game_index, dr, lr)
+        db.session.commit()
+
+    return render_template(
+        "lenses.html", document=document, game_index=game_index,
+        lr=lr, dr=dr, gate=gate,
+        core=lens_agent.CORE, lens_names=lens_agent.lens_names(),
+        core_size=len(lens_agent.CORE_LENSES),
+        playtest=lens_agent.needs_playtest(_sim_meta(doc_id, game_index)),
+    )
+
+
+@app.route("/documents/<int:doc_id>/lenses/<int:game_index>/retry", methods=["POST"])
+@login_required
+def lenses_retry(doc_id, game_index):
+    """Прогнать оценку по линзам заново (после сбоя или смены модели)."""
+    document = _owned_document(doc_id)
+    dr, lr = _lenses_context(doc_id, game_index)
+    lr.result_json = lr.issues_json = None
+    lr.error = None
+    _run_lenses(document, game_index, dr, lr)
+    db.session.commit()
+    return redirect(url_for("lenses", doc_id=doc_id, game_index=game_index))
+
+
+@app.route("/documents/<int:doc_id>/lenses/<int:game_index>.json")
+@login_required
+def lenses_json(doc_id, game_index):
+    """Отдаёт Findings_lenses.json файлом — вход синтезатора и режима B."""
+    _owned_document(doc_id)
+    lr = LensReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if lr is None or not lr.result_json:
+        abort(404)
+    return app.response_class(
+        lr.result_json, mimetype="application/json",
+        headers={"Content-Disposition":
+                 f'attachment; filename="findings_lenses_doc{doc_id}_game{game_index}.json"'},
+    )
+
+
+def _lenses_context(doc_id, game_index):
+    """Вердикты диагноста и запись линз — с проверкой порядка вызова.
+
+    Диагност обязателен: от него приходят и вопросы, требующие вердикта линз, и
+    сводка непроверенного. Без них агент оценивал бы игру вслепую и молча
+    пропустил бы гибридные тесты методички.
+    """
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if dr is None or not dr.findings_json:
+        flash("Сначала нужны вердикты диагноста — от него приходят вопросы к линзам.",
+              "warning")
+        abort(redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index)))
+
+    lr = LensReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if lr is None:
+        lr = LensReport(document_id=doc_id, game_index=game_index)
+        db.session.add(lr)
+        db.session.commit()
+    return dr, lr
+
+
+def _sim_meta(doc_id, game_index) -> dict:
+    """Метаданные симуляциониста о границах модели (могут отсутствовать)."""
+    sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    return (sk.meta() or {}) if sk is not None else {}
+
+
+def _run_lenses(document, game_index, dr, lr):
+    """Прогон агента по линзам.
+
+    Заметки собираются из ДВУХ источников: свободные наблюдения «Оценщика
+    статистик» и структурированные вопросы диагноста. Полные отчёты обоих
+    агентов на вход НЕ подаются — качественная и числовая оценки сходятся
+    впервые только в синтезаторе.
+    """
+    doc_id, game_index = document.id, game_index
+    gs = GameSpec.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    findings = dr.findings() or {}
+
+    canonical = stage1.game_text_for_agent(
+        document.stored_path, document.doc_type, game_index)
+
+    data = lens_agent.build_input(
+        gs.spec_dict() if gs else {},
+        canonical_text=canonical,
+        stats_notes=(br.report() or {}).get("notes_for_lenses") if br else None,
+        diagnost_notes=findings.get("notes_for_lenses"),
+        sim_meta=_sim_meta(doc_id, game_index),
+        coverage_summary=findings.get("coverage_summary"),
+    )
+
+    outcome = lens_agent.run(data)
+    if not outcome.get("available"):
+        lr.error = outcome.get("error") or "Оценщик по линзам недоступен."
+        return
+    lr.error = None
+    lr.result_json = json.dumps(outcome["report"], ensure_ascii=False)
+    lr.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
+
+
 @app.route("/documents/<int:doc_id>/synthesis/<int:game_index>")
 @login_required
 def synthesis(doc_id, game_index):
@@ -1341,14 +1458,17 @@ def _run_synthesis(document, game_index, br, dr, sr):
 
 
 def _lenses_findings(doc_id, game_index):
-    """Findings_lenses.json, когда «Оценщик по линзам» появится.
+    """Findings_lenses.json для синтезатора — или None, если линз ещё нет.
 
-    Сейчас агент не реализован, и вход отсутствует ЗАКОНОМЕРНО, а не по ошибке:
-    синтезатор помечает чисто-линзовые категории как N/A и говорит автору, что
-    качественная сторона не оценивалась. Подсовывать вместо этого пустой объект
-    нельзя — так «не оценивали» превратилось бы в «оценили и ничего не нашли».
+    Возвращать None при отсутствии оценки ОБЯЗАТЕЛЬНО: синтезатор различает
+    «линзы не запускались» (категории честно уходят в N/A, доверие к баллу
+    падает) и «линзы отработали и ничего не нашли». Пустой объект вместо None
+    превратил бы первое во второе — и балл выглядел бы полным, не будучи им.
     """
-    return None
+    lr = LensReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if lr is None or not lr.result_json:
+        return None
+    return lens_agent.to_synthesis(lr.result())
 
 
 def _synthesis_route(doc_id, game_index, sr):
@@ -1545,10 +1665,20 @@ def redesign_decide(doc_id, game_index):
         dr.kept_requests_json = dr.dropped_requests_json = None
         dr.error = dr.runs_error = None
         dr.attempt_number = (dr.attempt_number or 1) + 1
+
+    # Оценка по линзам — о ЗАМЫСЛЕ прежней версии игры. Правка меняет правила,
+    # а вместе с ними и то, что оценивалось: глубину решений, экономику как
+    # замысел, ответы на вопросы диагноста (самих вопросов после пересчёта
+    # может не остаться). Оставить её значило бы смешать в итоговом балле
+    # качественную оценку старой игры с числовой оценкой новой.
+    lr = LensReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if lr is not None:
+        lr.result_json = lr.issues_json = None
+        lr.error = None
     db.session.commit()
 
-    flash("Правка применена. Скелет, статистика и вердикты диагноста сброшены — "
-          "игру нужно пересимулировать и оценить заново.", "success")
+    flash("Правка применена. Скелет, статистика, вердикты диагноста и оценка по "
+          "линзам сброшены — игру нужно пересимулировать и оценить заново.", "success")
     return redirect(url_for("skeleton", doc_id=doc_id, game_index=game_index))
 
 

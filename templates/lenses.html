@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Оценка по линзам — ФинИгроСкоп{% endblock %}
+
+{% block content %}
+{% set result = lr.result() or {} %}
+{% set cats = result.get('categories') or [] %}
+{% set answers = result.get('answers_to_diagnost') or [] %}
+
+<section class="mirror-screen">
+    <div class="mirror-head">
+        <a class="back-link" href="{{ url_for('diagnost', doc_id=document.id, game_index=game_index) }}">← к диагносту</a>
+        <h1>Оценка по линзам Шелла</h1>
+        <p class="mirror-sub"><b>{{ document.filename }}</b> · Игра {{ game_index }}</p>
+        <p class="mirror-intro">Единственный шаг, который читает игру как игру, а не как набор чисел: замысел, глубину решений, вовлечение, образовательную ценность. Всё, что симуляция измерить не может — убедительность питча, напряжение за столом, вредность финансового урока, — доходит до итогового отчёта только отсюда. Оценивается рабочее ядро из {{ core_size }} линз в {{ core | length }} категориях.</p>
+    </div>
+
+    {# --- условие вызова: пока есть критичное, оценивать замысел рано --- #}
+    {% if not gate.ready %}
+    <div class="mirror-badge badge-open">
+        ⏸️ Оценка по линзам пока не запускается — {{ gate.reason }}.
+    </div>
+    {% if gate.critical %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🚩 Сначала ремонт <span class="mcard-count">{{ gate.critical | length }}</span></div>
+        <p class="dash-note">Оценивать замысел игры, у которой прямо сейчас работает эксплойт-петля или софтлок, бессмысленно: правка изменит те самые правила, по которым выставлялись бы оценки, и разбор устареет в момент её применения.</p>
+        <ul class="gap-list">
+            {% for f in gate.critical %}
+            <li class="gap-item gap-critical">
+                <div class="gap-head"><code>{{ f.get('code') }}</code><span class="qa-badge sev-critical">критично</span></div>
+                <div class="gap-missing">{{ f.get('detail') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+        <div class="accept-actions">
+            <a class="btn btn-primary" href="{{ url_for('redesign', doc_id=document.id, game_index=game_index) }}">К авто-редизайну →</a>
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {% if lr.error %}
+    <div class="mirror-error">
+        <span>🛑 {{ lr.error }}</span>
+        <form method="post" action="{{ url_for('lenses_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">Попробовать снова</button>
+        </form>
+    </div>
+    {% endif %}
+
+    {% if gate.ready and not result and not lr.error %}
+    <div class="mirror-loading">Агент проходит {{ core_size }} линз — это самый длинный разбор в конвейере…</div>
+    {% endif %}
+
+    {% if result %}
+    {# --- сводка: сколько категорий реально оценено --- #}
+    {% set scored = cats | rejectattr('na') | list %}
+    <div class="mirror-badge {{ 'badge-ready' if scored | length == cats | length else 'badge-open' }}">
+        {% if scored | length == cats | length %}
+        ✅ Оценены все {{ cats | length }} категорий — синтезатор соберёт полный балл.
+        {% else %}
+        ⚠️ Оценено {{ scored | length }} категорий из {{ cats | length }}: остальные честно помечены N/A и в итоговый балл не войдут — ни как ноль, ни как-либо ещё.
+        {% endif %}
+    </div>
+
+    {# --- баллы по категориям --- #}
+    <div class="mcard">
+        <div class="mcard-title">📊 Предварительные баллы по категориям</div>
+        <p class="dash-note">Среднее считает сервис, а не модель: N/A в него <b>не входит</b>. Категория с двумя оценками «8» и тремя N/A даёт 8.0, а не 3.2 — занижать за то, что нельзя было оценить, запрещено. Итоговый взвешенный балл выведет синтезатор.</p>
+        <div class="comp-table">
+            <div class="comp-row comp-head cat-row"><span>Категория</span><span>Балл</span><span>Оценено</span><span>Линзы</span></div>
+            {% for cat in cats %}
+            <div class="comp-row cat-row {{ 'cat-na' if cat.get('na') }}">
+                <span class="comp-name" data-l="Категория">{{ cat.get('name') }}</span>
+                {% if cat.get('na') %}
+                <span class="cat-na-note">не оценивалась (N/A) — в балл не войдёт</span>
+                {% else %}
+                <span data-l="Балл"><b>{{ '%.2f' | format(cat.get('category_avg_preliminary')) }}</b></span>
+                <span data-l="Оценено">{{ cat.get('scored') }} из {{ cat.get('total') }}</span>
+                <span data-l="Линзы">{{ core.get(cat.get('name'), []) | join(', ') }}</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    {# --- ответы на вопросы диагноста: гибридные тесты закрываются здесь --- #}
+    {% if answers %}
+    <div class="mcard mcard-accent">
+        <div class="mcard-title">💬 Ответы на вопросы диагноста <span class="mcard-count">{{ answers | length }}</span></div>
+        <p class="dash-note">По этим тестам методички число посчитано, а вердикт зависит от замысла игры. Без ответа тест повис бы: цифра есть, решения нет.</p>
+        <ul class="clar-list">
+            {% for a in answers %}
+            <li class="clar-item">
+                <div class="clar-q">
+                    тест {{ a.get('from_test') }}
+                    {% if a.get('verdict') %}<span class="qa-badge {{ 'sev-major' if a.get('verdict') == 'problem' else ('sev-minor' if a.get('verdict') == 'warning' else '') }}">{{ a.get('verdict') }}</span>{% endif %}
+                    {% if a.get('lenses_used') %}<span class="chip-mini">линзы {{ a.get('lenses_used') | join(', ') }}</span>{% endif %}
+                </div>
+                {% if a.get('question') %}<div class="qa-why">Вопрос: {{ a.get('question') }}</div>{% endif %}
+                <div class="clar-a">{{ a.get('answer') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# --- находки --- #}
+    {% if result.get('findings') %}
+    <div class="mcard">
+        <div class="mcard-title">🔍 Находки <span class="mcard-count">{{ result['findings'] | length }}</span></div>
+        <ul class="gap-list">
+            {% for f in result['findings'] %}
+            <li class="gap-item {{ 'gap-critical' if f.get('type') == 'problem' }}">
+                <div class="gap-head">
+                    <span class="qa-badge">{{ 'проблема' if f.get('type') == 'problem' else 'сильная сторона' }}</span>
+                    {% if f.get('lens') %}<span class="chip-mini">линза {{ f.get('lens') }}{% if lens_names.get(f.get('lens')) %} «{{ lens_names.get(f.get('lens')) }}»{% endif %}</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ f.get('text') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# --- плейтест --- #}
+    {% if result.get('playtest_recommended') %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">🎲 Рекомендован живой плейтест</div>
+        <div class="gap-missing">{{ result.get('playtest_reason') }}</div>
+        <p class="desc-hint">В такой игре ключевая механика симуляцией по существу не проверяется: симулятор моделирует её случайной величиной, и числа по ней отражают допущение, а не поведение живых игроков.</p>
+    </div>
+    {% elif playtest.required %}
+    <div class="mcard mcard-warn">
+        <div class="mcard-title">⚠️ Плейтест нужен, но агент его не рекомендовал</div>
+        <div class="gap-missing">{{ playtest.reasons | join('; ') }}</div>
+    </div>
+    {% endif %}
+
+    {# --- непроверенное --- #}
+    {% if result.get('unmeasured_noted') %}
+    <div class="mcard">
+        <div class="mcard-title">➖ Непроверенное, отмеченное агентом <span class="mcard-count">{{ result['unmeasured_noted'] | length }}</span></div>
+        <p class="dash-note">«Не измерено» — это не «нормально». Занижать оценку за это нельзя, но и молча засчитывать в плюс тоже.</p>
+        <ul class="open-list">
+            {% for u in result['unmeasured_noted'] %}
+            <li class="open-item">
+                <b>{{ u.get('area') }}</b>{% if u.get('why') %} — {{ u.get('why') }}{% endif %}
+                {% if u.get('lens_view') %}<div class="qa-why">{{ u.get('lens_view') }}</div>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# --- разбор по линзам целиком --- #}
+    <details class="raw-toggle">
+        <summary>Показать разбор по всем {{ core_size }} линзам</summary>
+        <div class="raw-body">
+            {% for cat in cats %}
+            <div class="spec-line"><b>{{ cat.get('name') }}</b></div>
+            <div class="map-grid">
+                {% for l in cat.get('lenses') or [] %}
+                {% set na = l.get('na') or l.get('score') is none %}
+                <div class="map-node {{ 'st-absent' if na else 'st-ok' }}">
+                    <span class="map-icon">{{ '➖' if na else l.get('score') }}</span>
+                    <div class="map-body">
+                        <div class="map-name">Линза {{ l.get('n') }}{% if l.get('name') %} «{{ l.get('name') }}»{% endif %}</div>
+                        <div class="map-note">{{ l.get('basis') or l.get('na_reason') or '—' }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+
+    {# --- самопроверка --- #}
+    {% if lr.issues() %}
+    <div class="mcard {{ 'mcard-warn' if lr.blocking_issues else '' }}">
+        <div class="mcard-title">🧪 Самопроверка отчёта <span class="mcard-count">{{ lr.issues() | length }}</span></div>
+        <p class="dash-note">Самые дорогие ошибки этого шага незаметны в готовом отчёте: N/A, посчитанный нулём (категория занижена за то, что нельзя было оценить), имя категории с лишним словом (категория молча выпадет из итогового балла) и потерянный вопрос диагноста (тест повиснет без вердикта). Поэтому их ищет код.</p>
+        <ul class="gap-list">
+            {% for i in lr.issues() %}
+            <li class="gap-item {{ 'gap-critical' if i.get('severity') == 'error' }}">
+                <div class="gap-head">
+                    <code>{{ i.get('code') }}</code>
+                    {% if i.get('severity') == 'error' %}<span class="qa-badge gap-badge">важно</span>{% endif %}
+                </div>
+                <div class="gap-missing">{{ i.get('message') }}</div>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="next-stage-cta">
+        <a class="btn btn-primary" href="{{ url_for('synthesis', doc_id=document.id, game_index=game_index) }}">К итоговой оценке →</a>
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('lenses_json', doc_id=document.id, game_index=game_index) }}">⬇ Скачать Findings_lenses.json</a>
+        <form method="post" action="{{ url_for('lenses_retry', doc_id=document.id, game_index=game_index) }}" style="display:inline">
+            <button class="btn btn-ghost btn-sm" type="submit">↻ Прогнать заново</button>
+        </form>
+        <span class="cta-hint">синтезатор сведёт эти баллы с числовой оценкой в общий балл</span>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
