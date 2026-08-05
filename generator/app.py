@@ -126,6 +126,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/pipeline/mechanics": self.route_pipeline,
             "/api/pipeline/story": self.route_pipeline_story,
             "/api/pipeline/features": self.route_pipeline_features,
+            "/api/pipeline/rules": self.route_pipeline_rules,
+            "/api/pipeline/package": self.route_pipeline_package,
             "/api/pipeline/status": self.route_pipeline_status,
             "/api/pipeline/cancel": self.route_pipeline_cancel,
             "/api/components": self.route_components,
@@ -356,6 +358,93 @@ class Handler(BaseHTTPRequestHandler):
                         "threshold": pipeline.PASSING_SCORE,
                         "built_on": built_on}, 202)
 
+    # Этап 6 ТЗ: краткие правила и советы. Последний проход конвейера — стоит
+    # на трёх принятых модулях и на расчёте компонентов этапа 5.
+    def route_pipeline_rules(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        chain, error = self.accepted_chain(payload, [
+            ("mechanics_job_id", "mechanics"),
+            ("story_job_id", "story"),
+            ("features_job_id", "features"),
+        ])
+        if error:
+            self.send_json(error[0], error[1])
+            return
+
+        # Компоненты считает КОД по таблицам, а не агент, поэтому они не звено
+        # цепочки и номера задачи у них нет: считаем прямо здесь, из тех же
+        # ответов опросника. Второй проход («final») — потому что правилам нужны
+        # и количества, и материалы, а материал появляется только в нём.
+        try:
+            computed = components_agent.final(params)
+        except components_agent.ComponentsError as error:
+            self.send_json({
+                "error": "Правила пишутся по рассчитанным компонентам, а расчёт "
+                         "не выполнен: %s" % error,
+                "stage": "компоненты"}, 422)
+            return
+
+        attempts = self._attempts(payload)
+        built_on = [self.chain_note(c) for c in chain]
+        modules = {link["phase"]: link["module"] for link in chain}
+        rows = computed["components"]
+
+        job_id = jobs.submit(
+            lambda progress: pipeline.run_rules(params, progress, modules, rows,
+                                                attempts, built_on=built_on))
+        self.send_json({"job_id": job_id, "attempts_allowed": attempts,
+                        "threshold": pipeline.PASSING_SCORE,
+                        "built_on": built_on,
+                        "components": computed}, 202)
+
+    # Упаковка: полное описание и game_spec.json. Через него сгенерированная
+    # игра попадает на симуляционный этап ФинИгроСкопа.
+    def route_pipeline_package(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        chain, error = self.accepted_chain(payload, [
+            ("mechanics_job_id", "mechanics"),
+            ("story_job_id", "story"),
+            ("features_job_id", "features"),
+            ("rules_job_id", "rules"),
+        ])
+        if error:
+            self.send_json(error[0], error[1])
+            return
+
+        try:
+            computed = components_agent.final(params)
+        except components_agent.ComponentsError as error:
+            self.send_json({
+                "error": "Упаковка описывает рассчитанные компоненты, а расчёт "
+                         "не выполнен: %s" % error,
+                "stage": "компоненты"}, 422)
+            return
+
+        modules = {link["phase"]: link["module"] for link in chain
+                   if link["phase"] != "rules"}
+        # Правила приходят из своей задачи тем же путём, что и модули, но в
+        # описание идут не как модуль, а как готовый текст разделов.
+        rules_variant = next(link["module"] for link in chain
+                             if link["phase"] == "rules")
+        built_on = [self.chain_note(c) for c in chain]
+        rows = computed["components"]
+
+        job_id = jobs.submit(
+            lambda progress: pipeline.run_packaging(
+                params, progress, modules, rows, rules_variant, built_on=built_on))
+        self.send_json({"job_id": job_id, "built_on": built_on,
+                        "components": computed}, 202)
+
     @staticmethod
     def _attempts(payload):
         attempts = payload.get("attempts")
@@ -559,8 +648,7 @@ if __name__ == "__main__":
     except AttributeError:                       # очень старый Python
         pass
 
-    host = "127.0.0.1"
-    port = 8000
+    host, port = config.bind()
 
     print("Сервер запущен: http://%s:%d" % (host, port))
     problem = config.problem()

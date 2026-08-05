@@ -106,6 +106,7 @@ class Fakes(object):
         monkeypatch.setattr(pipeline.mechanics, "generate", fake_generate)
         monkeypatch.setattr(pipeline.story, "generate", fake_generate)
         monkeypatch.setattr(pipeline.features, "generate", fake_generate)
+        monkeypatch.setattr(pipeline.rules, "generate", fake_generate)
         monkeypatch.setattr(pipeline.module_auditor, "audit_module", fake_audit)
         monkeypatch.setattr(pipeline.lens_review, "evaluate", fake_lens)
 
@@ -478,6 +479,73 @@ def test_нехватка_библиотеки_особенностей_не_п�
 
     assert fakes.calls["generate"] == 1
     assert "Библиотека особенностей" in str(raised.value)
+
+
+# --------------------------------------------------------------------------
+# Проход правил — четвёртый и последний
+# --------------------------------------------------------------------------
+
+FEATURES_MODULE = {"concept": "Кооперативный поиск для младших школьников."}
+ALL_MODULES = {"mechanics": MECHANICS_MODULE, "story": STORY_MODULE,
+               "features": FEATURES_MODULE}
+COMPONENTS = [{"component": "карты", "quantity": 35}]
+
+
+def test_правила_сверяются_со_всеми_тремя_модулями(monkeypatch):
+    fakes = Fakes(monkeypatch, [generation(1)], [audit()], [lens(7.8)])
+
+    out = pipeline.run_rules(PARAMS, Progress(), ALL_MODULES, COMPONENTS)
+
+    assert out["passed"] is True
+    assert out["phase"] == "rules"
+    assert fakes.audit_calls[0]["phase"] == "rules"
+    assert [p["phase"] for p in fakes.audit_calls[0]["previous"]] == [
+        "mechanics", "story", "features"]
+    assert fakes.lens_calls == ["rules"]
+
+
+def test_шаг_правил_называется_своим_именем(monkeypatch):
+    Fakes(monkeypatch, [generation(1)], [audit()], [lens(7.8)])
+    progress = Progress()
+    pipeline.run_rules(PARAMS, progress, ALL_MODULES, COMPONENTS)
+
+    steps = [s["step"] for s in progress.steps]
+    assert steps == ["сборка правил", "аудит модуля", "оценка по линзам"]
+
+
+def test_компоненты_не_становятся_основанием(monkeypatch):
+    """У расчёта по таблицам нет балла, который можно было бы не взять."""
+    Fakes(monkeypatch, [generation(1)], [audit()], [lens(7.8)])
+    built_on = [base("mechanics"), base("story"), base("features")]
+
+    out = pipeline.run_rules(PARAMS, Progress(), ALL_MODULES, COMPONENTS,
+                             built_on=built_on)
+
+    assert [b["phase"] for b in out["built_on"]] == ["mechanics", "story", "features"]
+    assert out["warnings"] == []
+
+
+def test_три_непринятых_основания_названы_все(monkeypatch):
+    Fakes(monkeypatch, [generation(1)], [audit()], [lens(7.8)])
+    built_on = [base("mechanics", accepted=False, score=4.1),
+                base("story", accepted=False, score=5.2),
+                base("features", accepted=False, score=5.9)]
+
+    out = pipeline.run_rules(PARAMS, Progress(), ALL_MODULES, COMPONENTS,
+                             built_on=built_on)
+    assert len(out["warnings"]) == 3
+
+
+def test_нехватка_модулей_не_повторяется(monkeypatch):
+    """Следующая попытка упрётся в то же самое, только за деньги."""
+    error = pipeline.rules.RulesError("не хватает принятых модулей: features")
+    fakes = Fakes(monkeypatch, [error], [audit()], [lens(7.0)])
+
+    with pytest.raises(pipeline.PipelineError) as raised:
+        pipeline.run_rules(PARAMS, Progress(), ALL_MODULES, COMPONENTS)
+
+    assert fakes.calls["generate"] == 1
+    assert "Правила собрать не удалось" in str(raised.value)
 
 
 def test_проход_механик_помечен_своей_фазой(monkeypatch):

@@ -35,6 +35,8 @@ from agents import features
 from agents import lens_review
 from agents import mechanics
 from agents import module_auditor
+from agents import packaging
+from agents import rules
 from agents import story
 
 # Сколько раз пробуем собрать модуль, дотягивающий до порога.
@@ -163,6 +165,71 @@ def run_features(params, progress, mechanics_module, story_module,
                "Библиотека особенностей не покрывает выбранные параметры: %s"),
         params=params, progress=progress, attempts=attempts,
         previous_modules=previous, scored=True, built_on=built_on)
+
+
+def run_rules(params, progress, modules, components, attempts=MAX_ATTEMPTS,
+              built_on=None):
+    """Проход кратких правил и советов — четвёртый и последний (этап 6 ТЗ).
+
+    `modules` — словарь принятых cleaned_module трёх предыдущих этапов.
+    `components` — строки расчёта этапа 5 после второго прохода, с материалами.
+    Считает их КОД, а не агент, поэтому в цепочку оснований они не попадают:
+    у расчёта по таблицам нет балла, который можно было бы не взять.
+
+    Единственный проход, где оцениваются не замысел, а изложение. Область линз
+    здесь — всё ядро (см. lens_scope в ФинИгроСкопе): к этому моменту описание
+    игры собрано целиком, и оценивать его больше нечем ограничивать.
+    """
+    previous = [{"phase": "mechanics", "module": (modules or {}).get("mechanics")},
+                {"phase": "story", "module": (modules or {}).get("story")},
+                {"phase": "features", "module": (modules or {}).get("features")}]
+
+    return _run_module(
+        phase="rules",
+        step_label="сборка правил",
+        step_detail="модель излагает принятую игру правилами и пишет советы",
+        generate=lambda: rules.generate(params, modules, components),
+        fatal=(rules.RulesError, "Правила собрать не удалось: %s"),
+        params=params, progress=progress, attempts=attempts,
+        previous_modules=previous, scored=True, built_on=built_on)
+
+
+def run_packaging(params, progress, modules, components, rules_variant,
+                  built_on=None):
+    """Упаковка: полное описание и game_spec.json. Не проход, а сборка.
+
+    Ни аудитора, ни линз здесь нет, и это не упущение. Оценивать нечего:
+    описание собирается из уже принятых модулей, а перевод в game_spec
+    проверяется собственным валидатором — он сверяет разбор действий с
+    действиями, метрику победы с ресурсами и случайность с ответом автора.
+    Позвать сюда аудитора значило бы попросить модель оценить, верно ли
+    переписано то, что она сама только что переписала.
+
+    Итог намеренно совпадает по форме с проходами в главном: `ok`, `warnings`,
+    `built_on` — чтобы страница показывала непринятые основания одним и тем же
+    кодом. Отличие одно: балла нет, и поле `scored` честно говорит об этом.
+    """
+    progress.check_cancelled()
+    progress.say("упаковка", attempt=1, attempts_total=1,
+                 detail="собираю описание и перевожу механики в game_spec")
+
+    try:
+        out = packaging.assemble(params, modules, components, rules_variant)
+    except packaging.PackagingError as error:
+        raise PipelineError(str(error)) from error
+
+    out.update({
+        "phase": "package",
+        "scored": False,
+        "passed": True,
+        "built_on": built_on,
+        "attempts_made": out.get("attempts", 1),
+        "attempts_allowed": packaging.MAX_ATTEMPTS,
+        "attempts": [],
+        "verdict": "Игра упакована: полное описание и game_spec.json готовы.",
+        "warnings": _built_on_warnings(built_on) + list(out.get("warnings") or []),
+    })
+    return out
 
 
 def _run_module(phase, step_label, step_detail, generate, fatal, params,

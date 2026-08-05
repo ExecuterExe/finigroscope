@@ -33,8 +33,18 @@ SUBMIT_PATH = "/api/lenses/module"
 # соседний сервис впустую, реже — держать пользователя перед готовым ответом.
 POLL_INTERVAL = 1.0
 
-# Сколько ждать ответа на сами HTTP-запросы (не на оценку целиком).
-HTTP_TIMEOUT = 20
+# Сколько ждать ответа на сами HTTP-запросы (не на оценку целиком). Значение
+# берётся из настроек: на бесплатных тарифах спящий сервис просыпается около
+# минуты, и фиксированных двадцати секунд там не хватало.
+HTTP_TIMEOUT = config.lens_http_timeout
+
+# Сколько раз повторить запрос, если сосед не отозвался. Ровно один повтор, и
+# только на сетевую ошибку: типовой случай — ФинИгроСкоп спал и сейчас
+# просыпается. Первый запрос будит его и обрывается, второй попадает в уже
+# живой сервис. Повторять ошибки ОТВЕТА (403, 404) нельзя: они не про сон, и
+# второй заход даст то же самое, только позже.
+RETRIES_ON_NETWORK = 1
+RETRY_DELAY = 5.0
 
 
 class LensError(Exception):
@@ -51,7 +61,7 @@ def _url(path):
     return config.lens_api_url.rstrip("/") + path
 
 
-def _request(url, payload=None):
+def _request(url, payload=None, retries=RETRIES_ON_NETWORK):
     data = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -66,16 +76,30 @@ def _request(url, payload=None):
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
+        # Ответ получен — сервис жив, и повторять незачем: 403 и 404 после
+        # паузы дадут ровно то же самое.
         raise LensError(_http_error(error))
-    except urllib.error.URLError as error:
+    except (urllib.error.URLError, TimeoutError) as error:
+        if retries > 0:
+            # Скорее всего сосед спал и сейчас просыпается: первый запрос его
+            # разбудил и оборвался, второй попадёт в живой сервис.
+            print("[линзы] %s не отозвался (%s), повтор через %.0f с"
+                  % (config.lens_api_url, _reason(error), RETRY_DELAY), flush=True)
+            time.sleep(RETRY_DELAY)
+            return _request(url, payload, retries - 1)
         raise LensError(
-            "ФинИгроСкоп недоступен по адресу %s (%s). Оценка по линзам живёт "
-            "в нём; проверьте, что сервис запущен и что LENS_API_URL в .env "
-            "указывает на него." % (config.lens_api_url, error.reason))
+            "ФинИгроСкоп недоступен по адресу %s (%s) — ждали %d с и повторили "
+            "%d раз. Оценка по линзам живёт в нём; проверьте, что сервис "
+            "запущен и что LENS_API_URL указывает на него. На бесплатных "
+            "тарифах сервис засыпает и просыпается около минуты."
+            % (config.lens_api_url, _reason(error), HTTP_TIMEOUT,
+               RETRIES_ON_NETWORK))
     except json.JSONDecodeError:
         raise LensError("ФинИгроСкоп вернул не JSON.")
-    except TimeoutError:
-        raise LensError("ФинИгроСкоп не ответил за %d с." % HTTP_TIMEOUT)
+
+
+def _reason(error):
+    return getattr(error, "reason", None) or type(error).__name__
 
 
 def _http_error(error):

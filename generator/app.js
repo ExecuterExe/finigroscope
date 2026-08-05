@@ -1,4 +1,4 @@
-/* =========================================================
+﻿/* =========================================================
    Опросный лист для формирования параметров игры
    Источник вопросов и вариантов: Tablitsy_Sovmestimosti_I_Oprosnik_30_07_26.xlsx,
    лист «Опросник».
@@ -1005,7 +1005,9 @@ function renderOutro() {
         '<div class="gen-slot" id="componentsBaseSlot"></div>' +
         '<div class="gen-slot" id="storySlot"></div>' +
         '<div class="gen-slot" id="featuresSlot"></div>' +
-        '<div class="gen-slot" id="componentsFinalSlot"></div>';
+        '<div class="gen-slot" id="componentsFinalSlot"></div>' +
+        '<div class="gen-slot" id="rulesSlot"></div>' +
+        '<div class="gen-slot" id="packageSlot"></div>';
 
     bindConflictJumps(screen);
     screen.querySelectorAll('.res-row').forEach(function(row) {
@@ -1372,6 +1374,13 @@ let mechanicsJobId = null;
 let mechanicsPassed = false;
 let storyJobId = null;
 let storyPassed = false;
+let featuresJobId = null;
+let featuresPassed = false;
+let rulesJobId = null;
+let rulesPassed = false;
+/* Последний собранный game_spec — держим на странице, чтобы кнопка выгрузки
+   работала без второго обращения к серверу. */
+let packedSpec = null;
 
 const PIPE_STEP_TEXT = {
     'в очереди': 'ставлю в очередь',
@@ -1433,6 +1442,44 @@ const FEATURES_PASS = {
     components: { slotId: 'componentsFinalSlot', pass: 'final' }
 };
 
+const RULES_PASS = {
+    slotId: 'rulesSlot',
+    btnId: 'rulesBtn',
+    url: 'api/pipeline/rules',
+    busyLabel: 'Пишу правила...',
+    idleLabel: 'Собрать правила с проверкой',
+    body: function() {
+        return {
+            answers: answers,
+            mechanics_job_id: mechanicsJobId,
+            story_job_id: storyJobId,
+            features_job_id: featuresJobId,
+            accept_anyway: !(mechanicsPassed && storyPassed && featuresPassed)
+        };
+    },
+    render: function(result) { return rulesHtml(result); }
+};
+
+const PACKAGE_PASS = {
+    slotId: 'packageSlot',
+    btnId: 'packageBtn',
+    url: 'api/pipeline/package',
+    busyLabel: 'Собираю игру...',
+    idleLabel: 'Упаковать игру',
+    body: function() {
+        return {
+            answers: answers,
+            mechanics_job_id: mechanicsJobId,
+            story_job_id: storyJobId,
+            features_job_id: featuresJobId,
+            rules_job_id: rulesJobId,
+            accept_anyway: !(mechanicsPassed && storyPassed && featuresPassed
+                             && rulesPassed)
+        };
+    },
+    render: function(result) { return packageHtml(result); }
+};
+
 function runPipeline(hardConflicts) {
     if (piping) return;
 
@@ -1453,7 +1500,7 @@ function runPipeline(hardConflicts) {
     mechanicsJobId = null;
     mechanicsPassed = false;
     clearSlots(['componentsBaseSlot', 'storySlot', 'featuresSlot',
-                'componentsFinalSlot']);
+                'componentsFinalSlot', 'rulesSlot', 'packageSlot']);
 
     startPass(MECHANICS_PASS);
 }
@@ -1469,7 +1516,8 @@ function runStory() {
        они ссылались на другие названия и другую историю. */
     storyJobId = null;
     storyPassed = false;
-    clearSlots(['featuresSlot', 'componentsFinalSlot']);
+    clearSlots(['featuresSlot', 'componentsFinalSlot', 'rulesSlot',
+                'packageSlot']);
 
     startPass(STORY_PASS);
 }
@@ -1482,7 +1530,38 @@ function runFeatures() {
                     'нечего.');
         return;
     }
+    /* Особенности пересобираются — прежние правила излагали другую игру. */
+    featuresJobId = null;
+    featuresPassed = false;
+    clearSlots(['rulesSlot', 'packageSlot']);
+
     startPass(FEATURES_PASS);
+}
+
+function runRules() {
+    if (piping) return;
+    if (!mechanicsJobId || !storyJobId || !featuresJobId) {
+        missingBase('rulesSlot', 'все три принятых модуля',
+                    'Правила ничего не придумывают — они излагают принятое.');
+        return;
+    }
+    /* Правила пересобираются — прежняя упаковка описывала другой текст. */
+    rulesJobId = null;
+    rulesPassed = false;
+    packedSpec = null;
+    clearSlots(['packageSlot']);
+
+    startPass(RULES_PASS);
+}
+
+function runPackage() {
+    if (piping) return;
+    if (!mechanicsJobId || !storyJobId || !featuresJobId || !rulesJobId) {
+        missingBase('packageSlot', 'все четыре принятых этапа',
+                    'Упаковка ничего не создаёт — она сводит готовое.');
+        return;
+    }
+    startPass(PACKAGE_PASS);
 }
 
 function clearSlots(ids) {
@@ -1570,10 +1649,21 @@ function passPoll(pass, jobId, started) {
                     } else if (pass === STORY_PASS) {
                         storyJobId = jobId;
                         storyPassed = !!body.result.passed;
+                    } else if (pass === FEATURES_PASS) {
+                        featuresJobId = jobId;
+                        featuresPassed = !!body.result.passed;
+                    } else if (pass === RULES_PASS) {
+                        rulesJobId = jobId;
+                        rulesPassed = !!body.result.passed;
+                    } else if (pass === PACKAGE_PASS) {
+                        packedSpec = body.result.spec || null;
                     }
                 }
                 passStop(pass, pass.render(body.result));
                 bindNextStage();
+                if (pass === PACKAGE_PASS && body.result) {
+                    bindPackageDownloads(body.result);
+                }
                 /* Компоненты считаются сразу за модулем, а не отдельной
                    кнопкой: расчёт мгновенный и бесплатный, а числа нужны
                    следующему шагу (симуляции) в любом случае. */
@@ -1786,12 +1876,226 @@ function featuresHtml(result) {
     html += pipeAttemptsTable(result.attempts || []);
     html += bestAttemptHtml(best);
 
-    html += '<p class="gen-note done-note">Это последний ИИ-агент модуля игры. ' +
-        'Дальше по ТЗ идут расчёт компонентов (этап 5, считает код) и краткие ' +
-        'правила с рекомендациями (этап 6).</p>';
+    /* Переход к этапу 6. Компоненты (этап 5) считает код, отдельной кнопки им
+       не нужно: маршрут правил считает их сам из тех же ответов. */
+    html += nextStageHtml('rulesBtn', result.passed,
+        'Собрать правила с проверкой',
+        'этап 6, последний: краткие правила и советы по принятым модулям и ' +
+            'рассчитанным компонентам',
+        'Меня устраивает, идём к правилам',
+        'порог не взят. Правила излагают принятое и его замечаний не чинят');
 
     html += '</div>';
     return html;
+}
+
+/* ---------- краткие правила и советы (этап 6) ---------- */
+
+function rulesHtml(result) {
+    if (!result || !result.ok) {
+        return genErrorHtml(result || { error: 'Пустой результат' });
+    }
+
+    const best = result.best || {};
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge' + (result.passed ? ' success' : '') + '">' +
+                (result.passed ? 'Порог взят' : 'Лучшее из полученного') +
+            '</span>' +
+            '<h3 class="gen-title">Правила собраны: попыток ' +
+                esc(result.attempts_made) + ' из ' +
+                esc(result.attempts_allowed) + '</h3>' +
+            '<p class="gen-note">' + esc(result.verdict) + '</p>' +
+        '</div>';
+
+    html += builtOnHtml(result.built_on);
+    html += otherWarningsHtml(result);
+    html += rulesCardHtml(best.variant || {});
+    html += pipeAttemptsTable(result.attempts || []);
+    html += bestAttemptHtml(best);
+
+    html += nextStageHtml('packageBtn', result.passed,
+        'Упаковать игру',
+        'последний шаг: полное описание по Приложению А и game_spec.json — ' +
+            'через него игра попадает на симуляционный этап ФинИгроСкопа',
+        'Меня устраивает, упаковать',
+        'порог не взят. Упаковка сводит готовое и замечаний не чинит');
+
+    html += '</div>';
+    return html;
+}
+
+/* ---------- упаковка: полное описание и game_spec.json ---------- */
+
+function packageHtml(result) {
+    if (!result || !result.ok) {
+        return genErrorHtml(result || { error: 'Пустой результат' });
+    }
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge success">Игра собрана</span>' +
+            '<h3 class="gen-title">' + esc(result.title || 'Игра') + '</h3>' +
+            (result.subtitle
+                ? '<p class="gen-note">' + esc(result.subtitle) + '</p>' : '') +
+        '</div>';
+
+    html += builtOnHtml(result.built_on);
+    html += otherWarningsHtml(result);
+
+    /* Две выгрузки, и они для разных читателей: описание — человеку, спека —
+       машине. Отдавать одно вместо другого нельзя ни в ту, ни в другую
+       сторону. */
+    html += '<div class="lens-retry-row">' +
+        '<button class="btn" type="button" id="specDownload">' +
+            'Скачать game_spec.json</button>' +
+        '<button class="btn ghost" type="button" id="docDownload">' +
+            'Скачать описание</button>' +
+        '<span class="compat-hint">game_spec — машинный формат ФинИгроСкопа: ' +
+            'по нему собирается симулятор и считается баланс</span>' +
+    '</div>';
+
+    (result.sections || []).forEach(function(block) {
+        html += '<div class="story-field spec-section">' +
+            '<span class="story-label">' + esc(block.heading) + '</span>' +
+            richText(block.text) + '</div>';
+    });
+
+    const core = ((result.spec || {}).game_spec || {}).core || {};
+    html += '<details class="pipe-details">' +
+        '<summary>Машинный вид: core игрового цикла</summary>' +
+        '<pre class="json-preview">' + esc(JSON.stringify(core, null, 2)) +
+        '</pre></details>';
+
+    html += '</div>';
+    return html;
+}
+
+/* Маленький разбор того, что собрал сам код: заголовки списков, пункты и
+   выделение. Полноценный markdown здесь не нужен и вреден — текст пришёл из
+   принятых модулей, и распознавать в нём разметку, которой мы не ставили,
+   значит менять смысл. */
+function richText(text) {
+    const lines = String(text || '').split('\n');
+    let html = '';
+    let list = null;
+
+    function closeList() {
+        if (list) { html += '</' + list + '>'; list = null; }
+    }
+
+    lines.forEach(function(raw) {
+        const line = raw.trim();
+        if (!line) { closeList(); return; }
+
+        const numbered = line.match(/^(\d+)\.\s+(.*)$/);
+        const bulleted = line.match(/^[-•]\s+(.*)$/);
+
+        if (numbered) {
+            if (list !== 'ol') { closeList(); html += '<ol class="story-list">'; list = 'ol'; }
+            html += '<li>' + bold(numbered[2]) + '</li>';
+        } else if (bulleted) {
+            if (list !== 'ul') { closeList(); html += '<ul class="story-list">'; list = 'ul'; }
+            html += '<li>' + bold(bulleted[1]) + '</li>';
+        } else {
+            closeList();
+            html += '<p>' + bold(line) + '</p>';
+        }
+    });
+
+    closeList();
+    return html;
+}
+
+function bold(text) {
+    return esc(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
+function download(name, text, type) {
+    const blob = new Blob([text], { type: type + ';charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function() { URL.revokeObjectURL(link.href); }, 1000);
+}
+
+function bindPackageDownloads(result) {
+    const spec = document.getElementById('specDownload');
+    if (spec) {
+        spec.onclick = function() {
+            download('game_spec.json',
+                     JSON.stringify(result.spec, null, 2), 'application/json');
+        };
+    }
+    const doc = document.getElementById('docDownload');
+    if (doc) {
+        doc.onclick = function() {
+            const name = (result.title || 'игра').replace(/[\\/:*?"<>|]/g, '');
+            download(name + '.md', result.description || '', 'text/markdown');
+        };
+    }
+}
+
+function rulesCardHtml(variant) {
+    if (!(variant.setup || []).length && !(variant.turn || []).length) return '';
+
+    let html = '<div class="story-card">';
+
+    [['setup', 'Подготовка'], ['turn', 'Ход игрока']].forEach(function(field) {
+        const steps = variant[field[0]] || [];
+        if (!steps.length) return;
+        html += '<div class="story-field">' +
+            '<span class="story-label">' + field[1] + '</span>' +
+            '<ol class="story-list rules-steps">' +
+            steps.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') +
+            '</ol></div>';
+    });
+
+    if ((variant.special_rules || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Особые правила</span>' +
+            '<ul class="story-list feature-list">' +
+            variant.special_rules.map(function(r) {
+                return '<li><b>' + esc(r.title || '') + '</b>' +
+                    '<div class="feature-body">' + esc(r.text || '') + '</div></li>';
+            }).join('') + '</ul></div>';
+    }
+
+    if (variant.ending) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Конец партии</span>' +
+            '<p>' + esc(variant.ending) + '</p></div>';
+    }
+
+    if ((variant.tips || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Советы и рекомендации</span>' +
+            '<ul class="story-list feature-list">' +
+            variant.tips.map(function(t) {
+                return '<li><b>' + esc(t.title || '') + '</b> ' +
+                    (t.for_whom
+                        ? '<span class="story-comp">' + esc(t.for_whom) + '</span>'
+                        : '') +
+                    '<div class="feature-body">' + esc(t.text || '') + '</div></li>';
+            }).join('') + '</ul></div>';
+    }
+
+    /* Пробелы показываем ЗАМЕТНО, а не мелким шрифтом внизу: недостающее
+       правило, о котором промолчали, обнаружится за столом. */
+    if ((variant.gaps || []).length) {
+        html += '<div class="compat compat-hard rules-gaps">' +
+            '<div class="compat-title">Для игры не хватает правил</div>' +
+            '<ul class="conflict-list">' +
+            variant.gaps.map(function(g) {
+                return '<li class="gen-problem">' + esc(g) + '</li>';
+            }).join('') + '</ul></div>';
+    }
+
+    return html + '</div>';
 }
 
 function featuresCardHtml(variant) {
@@ -1810,7 +2114,7 @@ function featuresCardHtml(variant) {
             '<span class="story-label">Особенности игры</span>' +
             '<ul class="story-list feature-list">' +
             variant.features.map(function(f) {
-                return '<li><b>' + esc(f.title || '') + '</b>' +
+                return '<li><b>' + esc(f.title || '') + '</b> ' +
                     '<span class="story-comp">' + esc(f.feature_id || '') + '</span>' +
                     '<div class="feature-body">' + esc(f.description || '') +
                     (f.why_it_matters
@@ -2030,6 +2334,10 @@ function bindNextStage() {
     if (story) story.onclick = function() { runStory(); };
     const feat = document.getElementById('featuresBtn');
     if (feat) feat.onclick = function() { runFeatures(); };
+    const rules = document.getElementById('rulesBtn');
+    if (rules) rules.onclick = function() { runRules(); };
+    const pack = document.getElementById('packageBtn');
+    if (pack) pack.onclick = function() { runPackage(); };
 }
 
 function bindPipeCancel(slot, jobId) {
@@ -2054,7 +2362,11 @@ function bindPassRetry(pass) {
     button.onclick = function() {
         button.disabled = true;
         button.textContent = 'Повторяю...';
-        if (pass === FEATURES_PASS) {
+        if (pass === PACKAGE_PASS) {
+            runPackage();
+        } else if (pass === RULES_PASS) {
+            runRules();
+        } else if (pass === FEATURES_PASS) {
             runFeatures();
         } else if (pass === STORY_PASS) {
             runStory();

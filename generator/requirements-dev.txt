@@ -1,6 +1,5 @@
-# Только для разработки. Сам сервис работает на стандартной библиотеке.
-#   python -m pip install -r requirements-dev.txt
+# Только для разработки. То, что нужно самому сервису, — в requirements.txt.
+#   python -m pip install -r requirements.txt -r requirements-dev.txt
 
 pytest>=8.0        # тесты агентов
-jsonschema>=4.0    # строгая проверка ответов модели
 openpyxl>=3.1      # tools/build_compat.py — пересборка таблицы совместимости

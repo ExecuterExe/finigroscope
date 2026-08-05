@@ -74,8 +74,9 @@ class Server(object):
 
 @pytest.fixture
 def server(monkeypatch):
-    """Подменяет urlopen и убирает паузы между опросами."""
+    """Подменяет urlopen и убирает паузы между опросами и повторами."""
     monkeypatch.setattr(lens_review, "POLL_INTERVAL", 0)
+    monkeypatch.setattr(lens_review, "RETRY_DELAY", 0)
 
     def run(submit, *statuses):
         fake = Server(submit, *statuses)
@@ -251,6 +252,47 @@ def test_недоступный_финигроскоп_подсказывает_
     text = str(error.value)
     assert "LENS_API_URL" in text
     assert config.lens_api_url in text
+
+
+def test_сетевой_сбой_повторяется_один_раз(server):
+    """Типовой случай — сосед спал: первый запрос его будит и обрывается."""
+    fake = server(urllib.error.URLError("Connection refused"))
+    with pytest.raises(lens_review.LensError):
+        evaluate()
+    assert len(fake.requests) == 1 + lens_review.RETRIES_ON_NETWORK
+
+
+def test_сон_соседа_назван_в_ошибке(server):
+    """Иначе непонятно, чинить настройки или просто подождать."""
+    server(urllib.error.URLError("timed out"))
+    with pytest.raises(lens_review.LensError) as error:
+        evaluate()
+    assert "засыпает" in str(error.value)
+
+
+def test_отказ_ответом_не_повторяется(server):
+    """403 после паузы даст ровно то же самое, только позже и дороже."""
+    fake = server(http_error(403))
+    with pytest.raises(lens_review.LensError):
+        evaluate()
+    assert len(fake.requests) == 1
+
+
+def test_повтор_доходит_до_живого_сервиса(server, monkeypatch):
+    """Ради этого повтор и сделан: второй запрос попадает в проснувшийся сервис."""
+    calls = {"n": 0}
+    real = Server({"ready": True, "job_id": "abc"}, {"status": "done", "result": RESULT})
+
+    def flaky(request, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise urllib.error.URLError("Connection refused")
+        return real(request, timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    out = evaluate()
+    assert out["score"]["overall"] == 7.412
+    assert calls["n"] == 3          # сорвался, повтор, опрос состояния
 
 
 def test_403_подсказывает_про_токен(server):

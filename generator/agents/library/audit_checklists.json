@@ -138,6 +138,63 @@
           "item": "Особенности добавляют новую глубину, а не повторяют уже описанный игровой цикл",
           "applies_when": null }
       ]
+    },
+
+    "rules": {
+      "order": 4,
+      "title": "Проверка кратких правил и советов",
+      "module_label": "КРАТКИЕ ПРАВИЛА",
+      "consistency": true,
+      "consistency_against": ["mechanics", "story", "features"],
+      "comment": "Последний проход конвейера, и единственный, где проверяется не замысел, а ИЗЛОЖЕНИЕ. Правила ничего не придумывают: всё, что в них есть, обязано браться из уже принятых модулей и расчёта компонентов. Поэтому почти все пункты — о верности принятому, а не о качестве текста.",
+      "llm": {
+        "tier": "pro",
+        "thinking": true,
+        "temperature": 0.2,
+        "max_tokens": 3000,
+        "timeout": 180
+      },
+      "relevant_params": ["age_group", "complexity", "player_count", "play_time",
+                          "elimination", "writing_required", "interaction",
+                          "adaptation"],
+      "checklist": [
+        { "id": "turn_matches_mechanics",
+          "item": "Ход игрока изложен тем же порядком действий, что в принятом модуле механик",
+          "applies_when": null },
+        { "id": "ending_matches_win_condition",
+          "item": "Конец партии и условие победы совпадают с принятым модулем механик",
+          "applies_when": null },
+        { "id": "components_only_from_list",
+          "item": "Упомянуты только рассчитанные компоненты, количества совпадают с расчётом",
+          "applies_when": null },
+        { "id": "no_new_rules",
+          "item": "Правила не вводят ничего, чего нет в принятых модулях: ни действий, ни исключений, ни уточнений",
+          "applies_when": null },
+        { "id": "features_reflected",
+          "item": "Особенности, меняющие действия игроков, попали в правила, а не потерялись",
+          "applies_when": null },
+        { "id": "playable_without_questions",
+          "item": "По этому тексту можно разложить игру и сыграть, ничего не спрашивая дополнительно",
+          "applies_when": null },
+        { "id": "setup_is_ordered",
+          "item": "Подготовка описана шагами в том порядке, в каком её выполняют",
+          "applies_when": null },
+        { "id": "language_fits_age",
+          "item": "Язык и длина изложения соответствуют age_group",
+          "applies_when": null },
+        { "id": "detail_fits_complexity",
+          "item": "Детализация правил соответствует заявленной complexity",
+          "applies_when": null },
+        { "id": "elimination_respected",
+          "item": "При elimination = false в правилах нет ни одного способа выбыть из партии",
+          "applies_when": { "param": "elimination", "equals": false } },
+        { "id": "writing_respected",
+          "item": "При writing_required = false правила ничего не требуют записывать",
+          "applies_when": { "param": "writing_required", "equals": false } },
+        { "id": "tips_are_practical",
+          "item": "Советы отвечают на вопросы, которые возникнут за столом, а не желают хорошей игры",
+          "applies_when": null }
+      ]
     }
   }
 }
