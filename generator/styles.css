@@ -760,6 +760,139 @@ body.nav-open {
     font-weight: 700;
 }
 
+/* ---------- полный проход по конвейеру ---------- */
+.pipe {
+    margin-top: 20px;
+}
+
+.pipe-head {
+    margin-bottom: 14px;
+}
+
+/* Балл попытки: годный и недотянувший должны отличаться с одного взгляда,
+   иначе таблицу из трёх строк приходится перечитывать. */
+.pipe-ok { color: var(--accent); }
+.pipe-low { color: #f8b26a; }
+
+.pipe-table td:first-child {
+    width: 90px;
+    color: var(--text-dim);
+}
+
+.pipe-details {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--card-border);
+}
+
+.pipe-details > summary {
+    cursor: pointer;
+    margin-bottom: 10px;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+/* «Построено на непринятом модуле». Стоит выше карточки сюжета намеренно:
+   прочитать красивый результат и не заметить, на чём он стоит, — ровно та
+   ошибка, ради которой блок и добавлен. */
+.built-on {
+    margin: 16px 0 0;
+}
+
+/* Карточка сюжета (этап 3). Читается как отрывок текста, а не как отчёт:
+   здесь единственное место конвейера, где результат — художественный, и
+   набирать его тем же плотным техническим шрифтом, что таблицы аудита,
+   значит мешать его читать. */
+.story-card {
+    margin: 18px 0;
+    padding: 20px 22px;
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.story-name {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.story-logline {
+    margin: 6px 0 0;
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+.story-field {
+    margin-top: 16px;
+}
+
+.story-field > p {
+    margin: 4px 0 0;
+    line-height: 1.6;
+}
+
+.story-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.story-hint {
+    margin: 4px 0 6px;
+    font-size: 13px;
+    color: var(--text-dim);
+}
+
+.story-list {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    line-height: 1.6;
+}
+
+.story-list > li {
+    margin-bottom: 4px;
+}
+
+/* Тип компонента рядом с придуманным именем: без него непонятно, что «Свеча» —
+   это кубик, а значит непонятно и то, что этап 5 будет считать. */
+.story-comp {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 12px;
+    color: var(--text-dim);
+}
+
+/* Особенности: название, идентификатор приёма и описание в одной записи.
+   Идентификатор виден намеренно — по нему понятно, что особенность взята из
+   библиотеки, а не сочинена на ходу. */
+.feature-list > li {
+    margin-bottom: 12px;
+}
+
+.feature-body {
+    margin-top: 3px;
+    line-height: 1.55;
+}
+
+.feature-why {
+    margin-top: 2px;
+    color: var(--text-dim);
+    font-size: 14px;
+}
+
+/* Конец цепочки ИИ-агентов. Сказать об этом стоит: иначе непонятно, ждать ли
+   ещё кнопку. */
+.done-note {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--card-border);
+}
+
 /* Строка с кнопкой повтора: кнопка и пояснение в одну линию. */
 .lens-retry-row {
     display: flex;
@@ -787,6 +920,13 @@ body.nav-open {
     font-size: 12px;
     line-height: 1.5;
     word-break: break-word;
+}
+
+/* Тупик ручного пути: не ошибка, поэтому не красный, но и не незаметный —
+   человек ждёт продолжения и должен узнать, что его здесь не будет. */
+.lens-deadend {
+    margin-top: 14px;
+    line-height: 1.6;
 }
 
 .lens-skip {

@@ -18,6 +18,9 @@ from config import config
 from agents import lens_review
 from agents import mechanics
 from agents import module_auditor
+from agents import pipeline
+from agents import story
+import jobs
 import llm
 import params as params_module
 
@@ -119,6 +122,11 @@ class Handler(BaseHTTPRequestHandler):
             "/api/audit/mechanics": self.route_audit_mechanics,
             "/api/lenses/module": self.route_lenses,
             "/api/lenses/status": self.route_lens_status,
+            "/api/pipeline/mechanics": self.route_pipeline,
+            "/api/pipeline/story": self.route_pipeline_story,
+            "/api/pipeline/features": self.route_pipeline_features,
+            "/api/pipeline/status": self.route_pipeline_status,
+            "/api/pipeline/cancel": self.route_pipeline_cancel,
         }
         handler = routes.get(path)
         if not handler:
@@ -269,6 +277,216 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_json(state)
 
+    # Полный проход по ТЗ: до трёх попыток «генерация → аудит → линзы», и если
+    # порог не взят ни разу — берётся попытка с наибольшим баллом.
+    def route_pipeline(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        attempts = payload.get("attempts")
+        if not isinstance(attempts, int) or not 1 <= attempts <= pipeline.MAX_ATTEMPTS:
+            attempts = pipeline.MAX_ATTEMPTS
+
+        # Ставим в очередь и сразу отвечаем: проход делает до девяти обращений
+        # к моделям и идёт минутами.
+        job_id = jobs.submit(lambda progress: pipeline.run(params, progress, attempts))
+        self.send_json({"job_id": job_id, "attempts_allowed": attempts,
+                        "threshold": pipeline.PASSING_SCORE}, 202)
+
+    # Этап 3 ТЗ: сюжет и артефакты поверх ПРИНЯТЫХ механик.
+    def route_pipeline_story(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        # Ворота проверяет СЕРВЕР по результату прохода механик, а не страница.
+        # Разница принципиальная: «механики приняты» — это вывод из двух платных
+        # проверок, и верить в него на слово браузеру нельзя. Поэтому на вход
+        # идёт номер завершённой задачи, а модуль сервер достаёт из неё сам.
+        chain, error = self.accepted_chain(payload, [("mechanics_job_id", "mechanics")])
+        if error:
+            self.send_json(error[0], error[1])
+            return
+
+        attempts = self._attempts(payload)
+        module = chain[0]["module"]
+        built_on = [self.chain_note(c) for c in chain]
+
+        job_id = jobs.submit(
+            lambda progress: pipeline.run_story(params, progress, module, attempts,
+                                                built_on=built_on))
+        self.send_json({"job_id": job_id, "attempts_allowed": attempts,
+                        "threshold": pipeline.PASSING_SCORE,
+                        "depth": story.depth_of(params),
+                        "built_on": built_on}, 202)
+
+    # Этап 4 ТЗ: концепция, особенности и помощь отстающим поверх ОБОИХ
+    # принятых модулей.
+    def route_pipeline_features(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        chain, error = self.accepted_chain(payload, [
+            ("mechanics_job_id", "mechanics"),
+            ("story_job_id", "story"),
+        ])
+        if error:
+            self.send_json(error[0], error[1])
+            return
+
+        attempts = self._attempts(payload)
+        built_on = [self.chain_note(c) for c in chain]
+        mechanics_module, story_module = chain[0]["module"], chain[1]["module"]
+
+        job_id = jobs.submit(
+            lambda progress: pipeline.run_features(
+                params, progress, mechanics_module, story_module, attempts,
+                built_on=built_on))
+        self.send_json({"job_id": job_id, "attempts_allowed": attempts,
+                        "threshold": pipeline.PASSING_SCORE,
+                        "built_on": built_on}, 202)
+
+    @staticmethod
+    def _attempts(payload):
+        attempts = payload.get("attempts")
+        if not isinstance(attempts, int) or not 1 <= attempts <= pipeline.MAX_ATTEMPTS:
+            return pipeline.MAX_ATTEMPTS
+        return attempts
+
+    @classmethod
+    def accepted_chain(cls, payload, wanted):
+        """Все основания этапа разом. Возвращает (список звеньев, ошибка).
+
+        `wanted` — пары «поле запроса → фаза» В ПОРЯДКЕ ЭТАПОВ. Порядок
+        сохраняется в ответе: аудитор читает список принятых модулей как
+        последовательность, и переставить их местами значит соврать ему о том,
+        что на чём построено.
+
+        Согласие автора (`accept_anyway`) распространяется на ВСЕ звенья сразу.
+        Разделять его по этапам можно, но пока незачем: автор соглашается идти
+        дальше с тем, что есть, а не выборочно прощает один модуль из двух.
+        """
+        force = bool(payload.get("accept_anyway"))
+        chain = []
+        for field, phase in wanted:
+            link, error = cls.accepted_module(payload.get(field), phase, force=force)
+            if error:
+                return None, error
+            chain.append(link)
+        return chain, None
+
+    @staticmethod
+    def chain_note(link):
+        """Звено цепочки без самого модуля — то, что уходит в отчёт и на экран.
+
+        Модуль отсюда убран намеренно: он и так лежит в результате прохода, а в
+        отчёте занял бы место дважды и уехал бы в браузер третьим экземпляром.
+        """
+        return {k: v for k, v in link.items() if k != "module"}
+
+    @staticmethod
+    def accepted_module(job_id, phase, force=False):
+        """Модуль предыдущего этапа для следующего. Возвращает (цепочка, ошибка).
+
+        Ошибка — готовая пара (тело ответа, код). Отдельным методом, потому что
+        следующий этап («особенности») будет доставать так же модули механик и
+        сюжета, и правило приёмки должно быть записано один раз.
+
+        В цепочку идёт cleaned_module аудита, а не сырой вывод генератора: это
+        контракт ModuleChain, и нарушать его здесь значило бы отдать сюжету
+        вариант, который аудитор мог поправить.
+
+        `force` — решение АВТОРА продолжить на непринятом модуле. По ТЗ (этапы
+        2–6, пункт 3) такое право у него есть: «если рекомендации выступают
+        просто в роли совета, программа может пропустить к следующему этапу».
+        Само по себе оно ничего не прощает: непринятость едет дальше в поле
+        `accepted` и обязана быть видна в итоге. Молчаливое «ну ладно» — как раз
+        то, чего здесь быть не должно.
+
+        Что `force` НЕ разрешает: строить этап на пропавшей задаче, на чужой
+        фазе, на незавершённом проходе и на результате без проверенного модуля.
+        Это не решения автора, а отсутствие входных данных.
+        """
+        if not job_id:
+            return None, ({"error": "Не указан номер прохода предыдущего этапа.",
+                           "stage": "цепочка"}, 400)
+
+        state = jobs.status(job_id)
+        if state is None:
+            return None, ({
+                "error": "Проход этапа «%s» не найден: сервер перезапускался "
+                         "или результат устарел. Запустите этап заново — иначе "
+                         "неизвестно, приняты его модули или нет." % phase,
+                "stage": "цепочка"}, 404)
+
+        if state["status"] != jobs.DONE:
+            return None, ({"error": "Этап «%s» ещё не завершён (%s)."
+                                    % (phase, state["status"]),
+                           "stage": "цепочка"}, 409)
+
+        result = state.get("result") or {}
+        if result.get("phase", "mechanics") != phase:
+            return None, ({"error": "Указан проход этапа «%s», а нужен «%s»."
+                                    % (result.get("phase"), phase),
+                           "stage": "цепочка"}, 400)
+
+        accepted = bool(result.get("passed"))
+        if not accepted and not force:
+            return None, ({
+                "error": "Модуль этапа «%s» не принят: %s. Следующий этап "
+                         "строится на нём, поэтому запускать его рано."
+                         % (phase, result.get("verdict") or "порог не взят"),
+                "stage": "цепочка",
+                # Признак для страницы: отказ снимается решением автора, а не
+                # починкой. Без него кнопка «продолжить» была бы догадкой.
+                "can_accept_anyway": True,
+                "score": (result.get("best") or {}).get("score"),
+                "threshold": result.get("threshold")}, 409)
+
+        module = ((result.get("best") or {}).get("audit") or {}).get("cleaned_module")
+        if not isinstance(module, dict) or not module:
+            return None, ({
+                "error": "В результате этапа «%s» нет проверенного модуля "
+                         "(cleaned_module). Запустите этап заново." % phase,
+                "stage": "цепочка"}, 409)
+
+        return {
+            "phase": phase,
+            "job_id": job_id,
+            "module": module,
+            "accepted": accepted,
+            "override": not accepted,
+            "score": (result.get("best") or {}).get("score"),
+            "threshold": result.get("threshold"),
+            "verdict": result.get("verdict"),
+        }, None
+
+    def route_pipeline_status(self, payload):
+        state = jobs.status(payload.get("job_id"))
+        if state is None:
+            self.send_json({"error": "Проход не найден — возможно, сервер "
+                                     "перезапускался. Запустите заново.",
+                            "stage": "проход"}, 404)
+            return
+        self.send_json(state)
+
+    def route_pipeline_cancel(self, payload):
+        stopped = jobs.request_cancel(payload.get("job_id"))
+        self.send_json({
+            "stopped": stopped,
+            "note": ("Остановим после текущего обращения к модели — прервать "
+                     "сам запрос нельзя, он уже отправлен."
+                     if stopped else "Проход уже завершился."),
+        })
+
     def route_complete(self, payload):
         messages = payload.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -300,6 +518,17 @@ if __name__ == "__main__":
     # и отвечала «неизвестный адрес» на маршрут, который в исходниках есть.
     if config.autoreload and not reloader.is_child():
         sys.exit(reloader.supervise())
+
+    # Построчный вывод. Под автоперезагрузкой сервер — дочерний процесс, его
+    # stdout уходит в канал родителю, а Python в канал пишет БЛОКАМИ по 8 КБ.
+    # Из-за этого журнал запросов, предупреждение «модель недоступна» и строки
+    # [линзы]/[проход] копились в буфере и не показывались вовсе, пока процесс
+    # жив, — то есть ровно тогда, когда они и нужны.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except AttributeError:                       # очень старый Python
+        pass
 
     host = "127.0.0.1"
     port = 8000

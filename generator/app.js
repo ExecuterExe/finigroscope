@@ -985,9 +985,25 @@ function renderOutro() {
         '<div class="nav fade-item stagger-4">' +
             '<button class="btn ghost" id="repeatBtn" type="button">Пройти заново</button>' +
             '<button class="btn ghost" id="saveBtn" type="button">Сохранить ответы</button>' +
-            '<button class="btn" id="genBtn" type="button">Сгенерировать механики</button>' +
+            '<button class="btn ghost" id="genBtn" type="button">Показать варианты</button>' +
+            '<button class="btn" id="pipeBtn" type="button">Собрать модуль с проверкой</button>' +
         '</div>' +
-        '<div class="gen-slot" id="genSlot"></div>';
+        '<p class="gen-note"><b>«Собрать модуль с проверкой»</b> — основной путь. ' +
+            'Проходит конвейер сам: генерация → аудит → линзы Шелла, до трёх ' +
+            'попыток. Если балл ниже 6, попытка повторяется; из всех выбирается ' +
+            'лучшая. Дальше открываются сюжет (этап 3) и особенности (этап 4). ' +
+            'Это до девяти обращений к моделям и несколько минут.</p>' +
+        /* Ручной путь оставлен ради единственного, чего конвейер не даёт:
+           посмотреть ВСЕ варианты цикла и выбрать другой, а не тот, который
+           генератор пометил рекомендованным. Продолжаться в сюжет он не может
+           и не должен — см. lensHtml(standalone). */
+        '<p class="gen-note"><b>«Показать варианты»</b> — разовый просмотр: ' +
+            'все варианты игрового цикла, можно выбрать любой и проверить его ' +
+            'аудитором и линзами. Конвейер отсюда не продолжается: сюжет ' +
+            'строится только поверх модуля, принятого полным проходом.</p>' +
+        '<div class="gen-slot" id="genSlot"></div>' +
+        '<div class="gen-slot" id="storySlot"></div>' +
+        '<div class="gen-slot" id="featuresSlot"></div>';
 
     bindConflictJumps(screen);
     screen.querySelectorAll('.res-row').forEach(function(row) {
@@ -1000,6 +1016,9 @@ function renderOutro() {
     document.getElementById('saveBtn').onclick = exportAnswers;
     document.getElementById('genBtn').onclick = function() {
         generateMechanics(result.hard.length);
+    };
+    document.getElementById('pipeBtn').onclick = function() {
+        runPipeline(result.hard.length);
     };
 
     updateProgress();
@@ -1254,7 +1273,10 @@ const AUDIT_STATUS = {
     'n/a': { mark: '—', title: 'проверка неприменима', cls: 'st-na' }
 };
 
-function auditHtml(body, variantId) {
+/* lensContent — готовый разбор по линзам, когда он УЖЕ известен (полный проход
+   считает его сам). При ручном проходе сюда не передаётся ничего: место
+   остаётся пустым, и его заполняет runLenses, когда придёт ответ. */
+function auditHtml(body, variantId, lensContent) {
     const labels = body.labels || {};
     const rows = body.map || [];
     const counts = { ok: 0, concern: 0, violation: 0, 'n/a': 0 };
@@ -1325,11 +1347,600 @@ function auditHtml(body, variantId) {
     // Место под оценку по линзам. Создаётся здесь, а не в index.html, чтобы
     // при повторной проверке варианта оно очищалось вместе с самим аудитом:
     // иначе рядом со свежим аудитом висел бы балл от прошлого прогона.
-    html += '<div id="lensSlot"></div>';
+    html += '<div id="lensSlot">' + (lensContent || '') + '</div>';
 
     html += '</div>';
 
     return html;
+}
+
+/* ---------- полный проход: генерация → аудит → линзы, до трёх попыток ---------- */
+
+let piping = false;
+let pipeJobId = null;
+
+/* Номер ЗАВЕРШЁННОГО прохода механик. На следующий этап уходит именно он, а не
+   сам модуль: «механики приняты» — это вывод из двух платных проверок, и верить
+   в него на слово странице нельзя. Модуль сервер достаёт из задачи сам
+   (accepted_module в app.py). */
+let mechanicsJobId = null;
+/* Взял ли этот проход порог. Хранится отдельно от номера задачи, потому что
+   продолжить можно и на непринятом модуле — но только явным решением автора,
+   и кнопка тогда должна выглядеть иначе. */
+let mechanicsPassed = false;
+let storyJobId = null;
+let storyPassed = false;
+
+const PIPE_STEP_TEXT = {
+    'в очереди': 'ставлю в очередь',
+    'готово': 'заканчиваю'
+};
+
+/* Проходы отличаются четырьмя вещами: куда стучаться, что отправлять, куда
+   писать результат и чем его рисовать. Всё остальное — постановка в очередь,
+   опрос, отмена, повтор — общее, и дублировать его на каждый новый этап
+   конвейера значило бы чинить потом в трёх местах. */
+const MECHANICS_PASS = {
+    slotId: 'genSlot',
+    btnId: 'pipeBtn',
+    url: 'api/pipeline/mechanics',
+    busyLabel: 'Иду по конвейеру...',
+    idleLabel: 'Собрать модуль с проверкой',
+    body: function() { return { answers: answers }; },
+    render: function(result) { return pipelineHtml(result); }
+};
+
+const STORY_PASS = {
+    slotId: 'storySlot',
+    btnId: 'storyBtn',
+    url: 'api/pipeline/story',
+    busyLabel: 'Сочиняю сюжет...',
+    idleLabel: 'Собрать сюжет с проверкой',
+    body: function() {
+        return {
+            answers: answers,
+            mechanics_job_id: mechanicsJobId,
+            /* Решение автора идти дальше на непринятом модуле. Отправляется
+               только когда он его действительно принял: сервер по умолчанию
+               отказывает, и это правильный порядок. */
+            accept_anyway: !mechanicsPassed
+        };
+    },
+    render: function(result) { return storyHtml(result); }
+};
+
+const FEATURES_PASS = {
+    slotId: 'featuresSlot',
+    btnId: 'featuresBtn',
+    url: 'api/pipeline/features',
+    busyLabel: 'Описываю особенности...',
+    idleLabel: 'Собрать особенности с проверкой',
+    body: function() {
+        return {
+            answers: answers,
+            mechanics_job_id: mechanicsJobId,
+            story_job_id: storyJobId,
+            accept_anyway: !(mechanicsPassed && storyPassed)
+        };
+    },
+    render: function(result) { return featuresHtml(result); }
+};
+
+function runPipeline(hardConflicts) {
+    if (piping) return;
+
+    const slot = document.getElementById('genSlot');
+
+    if (hardConflicts) {
+        slot.innerHTML = '<div class="compat compat-hard">' +
+            '<div class="compat-title">Сначала уберите противоречия</div>' +
+            '<p class="compat-note">Полный проход стоит нескольких обращений ' +
+            'к моделям. Запускать его на несовместимых ответах — платить за ' +
+            'заведомо негодный модуль.</p></div>';
+        return;
+    }
+
+    /* Механики пересобираются — прежний сюжет к ним больше не относится.
+       Оставить его на экране значило бы показывать историю поверх цикла,
+       которого уже нет. */
+    mechanicsJobId = null;
+    mechanicsPassed = false;
+    clearSlots(['storySlot', 'featuresSlot']);
+
+    startPass(MECHANICS_PASS);
+}
+
+function runStory() {
+    if (piping) return;
+    if (!mechanicsJobId) {
+        missingBase('storySlot', 'принятые механики',
+                    'Сюжет строится поверх готового игрового цикла.');
+        return;
+    }
+    /* Сюжет пересобирается — прежние особенности к нему больше не относятся:
+       они ссылались на другие названия и другую историю. */
+    storyJobId = null;
+    storyPassed = false;
+    clearSlots(['featuresSlot']);
+
+    startPass(STORY_PASS);
+}
+
+function runFeatures() {
+    if (piping) return;
+    if (!mechanicsJobId || !storyJobId) {
+        missingBase('featuresSlot', 'принятые механики и сюжет',
+                    'Особенности надстраиваются над обоими: без них описывать ' +
+                    'нечего.');
+        return;
+    }
+    startPass(FEATURES_PASS);
+}
+
+function clearSlots(ids) {
+    ids.forEach(function(id) {
+        const slot = document.getElementById(id);
+        if (slot) slot.innerHTML = '';
+    });
+}
+
+function missingBase(slotId, what, why) {
+    const slot = document.getElementById(slotId);
+    if (!slot) return;
+    slot.innerHTML = '<div class="compat compat-hard">' +
+        '<div class="compat-title">Сначала нужны ' + esc(what) + '</div>' +
+        '<p class="compat-note">' + esc(why) + ' Запустите предыдущий этап ' +
+        'заново.</p></div>';
+}
+
+function startPass(pass) {
+    if (piping) return;
+
+    const slot = document.getElementById(pass.slotId);
+    const btn = document.getElementById(pass.btnId);
+    if (!slot || !btn) return;
+
+    piping = true;
+    btn.disabled = true;
+    btn.textContent = pass.busyLabel;
+
+    fetch(pass.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pass.body())
+    }).then(function(response) {
+        return response.json();
+    }).then(function(body) {
+        if (!body || body.error || !body.job_id) {
+            passStop(pass, genErrorHtml(body || { error: 'Пустой ответ' }));
+            return;
+        }
+        pipeJobId = body.job_id;
+        passPoll(pass, pipeJobId, Date.now());
+    }).catch(function(e) {
+        passStop(pass, genErrorHtml({ error: 'Сервер не ответил: ' + e.message }));
+    });
+}
+
+function passStop(pass, html) {
+    piping = false;
+    pipeJobId = null;
+    const slot = document.getElementById(pass.slotId);
+    const btn = document.getElementById(pass.btnId);
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = pass.idleLabel;
+    }
+    if (slot) slot.innerHTML = html;
+}
+
+function passPoll(pass, jobId, started) {
+    function ask() {
+        fetch('api/pipeline/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId })
+        }).then(function(response) {
+            return response.json();
+        }).then(function(body) {
+            const slot = document.getElementById(pass.slotId);
+            if (!slot) return;
+
+            if (!body || body.error && !body.status) {
+                passStop(pass, lensFailHtml(body || { error: 'Пустой ответ' }));
+                bindPassRetry(pass);
+                return;
+            }
+            if (body.status === 'done') {
+                /* Номер задачи запоминаем в любом случае: продолжить можно и на
+                   непринятом модуле, но только явным решением автора — и тогда
+                   номер понадобится. Принятость держим отдельным признаком. */
+                if (body.result) {
+                    if (pass === MECHANICS_PASS) {
+                        mechanicsJobId = jobId;
+                        mechanicsPassed = !!body.result.passed;
+                    } else if (pass === STORY_PASS) {
+                        storyJobId = jobId;
+                        storyPassed = !!body.result.passed;
+                    }
+                }
+                passStop(pass, pass.render(body.result));
+                bindNextStage();
+                return;
+            }
+            if (body.status === 'failed') {
+                passStop(pass, lensFailHtml({ error: body.error }));
+                bindPassRetry(pass);
+                return;
+            }
+            slot.innerHTML = pipeWaitHtml(body, started);
+            bindPipeCancel(slot, jobId);
+            setTimeout(ask, 2000);
+        }).catch(function(e) {
+            passStop(pass, lensFailHtml({ error: 'Сервер не ответил: ' + e.message }));
+            bindPassRetry(pass);
+        });
+    }
+
+    ask();
+}
+
+function pipeWaitHtml(state, started) {
+    const seconds = Math.round((Date.now() - started) / 1000);
+    const total = state.attempts_total || 3;
+    const now = state.attempt || 1;
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge">Попытка ' + esc(now) + ' из ' + esc(total) + '</span>' +
+            '<h3 class="gen-title">' + esc(PIPE_STEP_TEXT[state.step] || state.step) +
+                ' <span class="lens-clock">' + seconds + ' с</span></h3>' +
+            (state.detail ? '<p class="gen-note">' + esc(state.detail) + '</p>' : '') +
+        '</div>';
+
+    /* Итоги прошлых попыток показываем ПО ХОДУ. Иначе при трёх попытках пять
+       минут не на что смотреть, а результат первой уже известен. */
+    if ((state.attempts || []).length) {
+        html += pipeAttemptsTable(state.attempts);
+    }
+
+    html += '<div class="lens-retry-row">' +
+        '<button class="btn ghost small" type="button" id="pipeCancel">' +
+            'Остановить</button>' +
+        '<span class="compat-hint">Остановится после текущего обращения к ' +
+            'модели — прервать сам запрос нельзя, он уже отправлен.</span>' +
+    '</div></div>';
+
+    return html;
+}
+
+function pipeAttemptsTable(rows) {
+    return '<table class="lens-table pipe-table"><thead><tr>' +
+        '<th>Попытка</th><th>Итог</th><th>Балл</th></tr></thead><tbody>' +
+        rows.map(function(r) {
+            const outcome = r.ok
+                ? esc(r.title || 'модуль собран')
+                : '<i>сорвалась на этапе «' + esc(r.stage) + '»: ' +
+                  esc(r.reason || '') + '</i>';
+            const mark = (r.score === null || r.score === undefined)
+                ? '—'
+                : '<b class="' + (r.passed ? 'pipe-ok' : 'pipe-low') + '">' +
+                  esc(r.score) + '</b>';
+            return '<tr><td>' + esc(r.attempt) + '</td><td>' + outcome +
+                '</td><td>' + mark + '</td></tr>';
+        }).join('') + '</tbody></table>';
+}
+
+function pipelineHtml(result) {
+    if (!result || !result.ok) {
+        return genErrorHtml(result || { error: 'Пустой результат' });
+    }
+
+    const best = result.best || {};
+    const passed = result.passed;
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge' + (passed ? ' success' : '') + '">' +
+                (passed ? 'Порог взят' : 'Лучшее из полученного') +
+            '</span>' +
+            '<h3 class="gen-title">Проход завершён: попыток ' +
+                esc(result.attempts_made) + ' из ' +
+                esc(result.attempts_allowed) + '</h3>' +
+            '<p class="gen-note">' + esc(result.verdict) + '</p>' +
+        '</div>';
+
+    if ((result.warnings || []).length) {
+        html += '<ul class="conflict-list">' + result.warnings.map(function(w) {
+            return '<li class="gen-problem">' + esc(w) + '</li>';
+        }).join('') + '</ul>';
+    }
+
+    html += pipeAttemptsTable(result.attempts || []);
+
+    /* Дальше — тот же разбор, что и при ручном проходе: аудит и линзы лучшей
+       попытки целиком. Показывать один балл и прятать, из чего он сложился,
+       нельзя: по баллу нельзя понять, что чинить. */
+    if (best.audit && best.audit.map) {
+        html += '<details class="pipe-details" open>' +
+            '<summary>Разбор лучшей попытки (' + esc(best.attempt) + ')</summary>' +
+            auditHtml(best.audit, best.variant_id,
+                      best.lens ? lensHtml(best.lens, best.variant_id) : '') +
+            '</details>';
+    }
+
+    /* Переход к этапу 3. У принятого модуля это обычный следующий шаг, у
+       непринятого — решение автора: по ТЗ (этапы 2-6, пункт 3) он вправе
+       продолжить, если считает замечания советом. Кнопки поэтому разные и по
+       виду, и по тексту: одинаковыми они превратили бы выбор в формальность. */
+    if ((result.phase || 'mechanics') === 'mechanics') {
+        html += nextStageHtml('storyBtn', passed,
+            'Собрать сюжет с проверкой',
+            'этап 3: название игры, сюжет и имена артефактов поверх принятых ' +
+                'механик — снова генерация, аудит и линзы, до трёх попыток',
+            'Меня устраивает, идём к сюжету',
+            'порог не взят. Замечания выше останутся в игре: сюжет их не ' +
+                'чинит, а надстраивается над ними. Если считаете их советом, ' +
+                'а не браком — можно продолжать');
+    }
+
+    html += '</div>';
+    return html;
+}
+
+/* ---------- сюжет и артефакты (этап 3) ---------- */
+
+function storyHtml(result) {
+    if (!result || !result.ok) {
+        return genErrorHtml(result || { error: 'Пустой результат' });
+    }
+
+    const best = result.best || {};
+    const scored = result.scored !== false;
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge' + (result.passed ? ' success' : '') + '">' +
+                (scored ? (result.passed ? 'Порог взят' : 'Лучшее из полученного')
+                        : 'Принят без балла') +
+            '</span>' +
+            '<h3 class="gen-title">Сюжет собран: попыток ' +
+                esc(result.attempts_made) + ' из ' +
+                esc(result.attempts_allowed) + '</h3>' +
+            '<p class="gen-note">' + esc(result.verdict) + '</p>' +
+        '</div>';
+
+    html += builtOnHtml(result.built_on);
+    html += otherWarningsHtml(result);
+    html += storyCardHtml(best.variant || {});
+    html += pipeAttemptsTable(result.attempts || []);
+    html += bestAttemptHtml(best);
+
+    /* Переход к этапу 4. Как и на предыдущем шаге: у принятого модуля это
+       обычный следующий шаг, у непринятого — решение автора. */
+    html += nextStageHtml('featuresBtn', result.passed,
+        'Собрать особенности с проверкой',
+        'этап 4: концепция, особенности игры и помощь отстающим поверх ' +
+            'принятых механик и сюжета',
+        'Меня устраивает, идём к особенностям',
+        'порог не взят. Особенности надстраиваются над сюжетом и его ' +
+            'замечаний не чинят');
+
+    html += '</div>';
+    return html;
+}
+
+/* ---------- особенности игры (этап 4) ---------- */
+
+function featuresHtml(result) {
+    if (!result || !result.ok) {
+        return genErrorHtml(result || { error: 'Пустой результат' });
+    }
+
+    const best = result.best || {};
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge' + (result.passed ? ' success' : '') + '">' +
+                (result.passed ? 'Порог взят' : 'Лучшее из полученного') +
+            '</span>' +
+            '<h3 class="gen-title">Особенности собраны: попыток ' +
+                esc(result.attempts_made) + ' из ' +
+                esc(result.attempts_allowed) + '</h3>' +
+            '<p class="gen-note">' + esc(result.verdict) + '</p>' +
+        '</div>';
+
+    html += builtOnHtml(result.built_on);
+    html += otherWarningsHtml(result);
+    html += featuresCardHtml(best.variant || {});
+    html += pipeAttemptsTable(result.attempts || []);
+    html += bestAttemptHtml(best);
+
+    html += '<p class="gen-note done-note">Это последний ИИ-агент модуля игры. ' +
+        'Дальше по ТЗ идут расчёт компонентов (этап 5, считает код) и краткие ' +
+        'правила с рекомендациями (этап 6).</p>';
+
+    html += '</div>';
+    return html;
+}
+
+function featuresCardHtml(variant) {
+    if (!variant.concept && !(variant.features || []).length) return '';
+
+    let html = '<div class="story-card">';
+
+    if (variant.concept) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Концепция</span>' +
+            '<p>' + esc(variant.concept) + '</p></div>';
+    }
+
+    if ((variant.features || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Особенности игры</span>' +
+            '<ul class="story-list feature-list">' +
+            variant.features.map(function(f) {
+                return '<li><b>' + esc(f.title || '') + '</b>' +
+                    '<span class="story-comp">' + esc(f.feature_id || '') + '</span>' +
+                    '<div class="feature-body">' + esc(f.description || '') +
+                    (f.why_it_matters
+                        ? '<div class="feature-why">' + esc(f.why_it_matters) + '</div>'
+                        : '') +
+                    '</div></li>';
+            }).join('') + '</ul></div>';
+    }
+
+    [['catch_up_help', 'Как игра помогает отстающим'],
+     ['accessibility', 'Доступность и адаптация']].forEach(function(field) {
+        const value = variant[field[0]];
+        if (!value) return;
+        html += '<div class="story-field">' +
+            '<span class="story-label">' + field[1] + '</span>' +
+            '<p>' + esc(value) + '</p></div>';
+    });
+
+    return html + '</div>';
+}
+
+/* ---------- общее для этапов ---------- */
+
+/* На чём построен этап. Отдельным блоком, а не строкой среди предупреждений:
+   модуль может взять свои 8 из 10 и всё равно стоять на механиках с баллом 4,
+   и по карточке этого не видно никак. */
+function builtOnHtml(list) {
+    const shaky = (list || []).filter(function(b) { return b && b.override; });
+    if (!shaky.length) return '';
+
+    return '<div class="compat compat-hard built-on">' +
+        '<div class="compat-title">Построено на непринятых модулях: ' +
+            shaky.map(function(b) {
+                return esc(b.phase) + (b.score === null || b.score === undefined
+                    ? '' : ' (' + esc(b.score) + ' при пороге ' + esc(b.threshold) + ')');
+            }).join(', ') +
+        '</div>' +
+        '<p class="compat-note">Вы решили продолжить, и это ваше право. Но ' +
+            'замечания к этим модулям никуда не делись: следующий этап их не ' +
+            'чинит, а надстраивается над ними, и в готовую игру они перейдут.</p>' +
+    '</div>';
+}
+
+/* То же предупреждение уже показано блоком выше. В результате прохода оно
+   остаётся — его читает не только страница, — но выводить его дважды значит
+   приучать пропускать оба. */
+function otherWarningsHtml(result) {
+    const shaky = (result.built_on || []).some(function(b) { return b && b.override; });
+    const rest = (result.warnings || []).filter(function(w) {
+        return !(shaky && w.indexOf('НЕПРИНЯТОМ') !== -1);
+    });
+    if (!rest.length) return '';
+    return '<ul class="conflict-list">' + rest.map(function(w) {
+        return '<li class="gen-problem">' + esc(w) + '</li>';
+    }).join('') + '</ul>';
+}
+
+function bestAttemptHtml(best) {
+    if (!best.audit || !best.audit.map) return '';
+    return '<details class="pipe-details">' +
+        '<summary>Разбор лучшей попытки (' + esc(best.attempt) + ')</summary>' +
+        auditHtml(best.audit, best.variant_id,
+                  best.lens ? lensHtml(best.lens, best.variant_id) : '') +
+        '</details>';
+}
+
+function nextStageHtml(buttonId, passed, okLabel, okHint, anywayLabel, anywayHint) {
+    return '<div class="lens-retry-row">' +
+        (passed
+            ? '<button class="btn" type="button" id="' + buttonId + '">' +
+                  esc(okLabel) + '</button>' +
+              '<span class="compat-hint">' + esc(okHint) + '</span>'
+            : '<button class="btn ghost" type="button" id="' + buttonId + '">' +
+                  esc(anywayLabel) + '</button>' +
+              '<span class="compat-hint">' + esc(anywayHint) + '</span>') +
+    '</div>';
+}
+
+function storyCardHtml(variant) {
+    if (!variant.title) return '';
+
+    let html = '<div class="story-card">' +
+        '<div class="story-name">' + esc(variant.title) + '</div>';
+
+    if (variant.logline) {
+        html += '<p class="story-logline">' + esc(variant.logline) + '</p>';
+    }
+
+    [['setting', 'Место действия'], ['player_role', 'Кем играют'],
+     ['synopsis', 'Сюжет'], ['stakes', 'Что на кону'],
+     ['ending', 'Развязка']].forEach(function(field) {
+        const value = variant[field[0]];
+        if (!value) return;
+        html += '<div class="story-field">' +
+            '<span class="story-label">' + field[1] + '</span>' +
+            '<p>' + esc(value) + '</p></div>';
+    });
+
+    if ((variant.characters || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Персонажи</span><ul class="story-list">' +
+            variant.characters.map(function(c) {
+                return '<li><b>' + esc(c.name || '') + '</b> — ' +
+                    esc(c.role || '') + '</li>';
+            }).join('') + '</ul></div>';
+    }
+
+    if ((variant.artifacts || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Артефакты</span>' +
+            '<p class="story-hint">Сколько их и из чего они — посчитает ' +
+                'программа на этапе 5. Здесь только имена и роль в истории.</p>' +
+            '<ul class="story-list">' +
+            variant.artifacts.map(function(a) {
+                return '<li><b>' + esc(a.name || '') + '</b> ' +
+                    '<span class="story-comp">' + esc(a.component || '') + '</span> — ' +
+                    esc(a.role || '') + '</li>';
+            }).join('') + '</ul></div>';
+    }
+
+    return html + '</div>';
+}
+
+function bindNextStage() {
+    const story = document.getElementById('storyBtn');
+    if (story) story.onclick = function() { runStory(); };
+    const feat = document.getElementById('featuresBtn');
+    if (feat) feat.onclick = function() { runFeatures(); };
+}
+
+function bindPipeCancel(slot, jobId) {
+    const button = slot.querySelector('#pipeCancel');
+    if (!button) return;
+    button.onclick = function() {
+        button.disabled = true;
+        button.textContent = 'Останавливаю...';
+        fetch('api/pipeline/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId })
+        });
+    };
+}
+
+function bindPassRetry(pass) {
+    const slot = document.getElementById(pass.slotId);
+    if (!slot) return;
+    const button = slot.querySelector('#lensRetry');
+    if (!button) return;
+    button.onclick = function() {
+        button.disabled = true;
+        button.textContent = 'Повторяю...';
+        if (pass === FEATURES_PASS) {
+            runFeatures();
+        } else if (pass === STORY_PASS) {
+            runStory();
+        } else {
+            runPipeline(0);
+        }
+    };
 }
 
 /* ---------- оценка по линзам Шелла ---------- */
@@ -1399,7 +2010,7 @@ function runLenses(module, audit, variantId) {
                ронять уже полученную (и оплаченную) оценку из-за версии сервера
                было бы обиднее всего. */
             if (!body.job_id) {
-                clock.stop(lensHtml(body, variantId));
+                clock.stop(lensHtml(body, variantId, true));
                 return;
             }
             lensPoll(slot, body.job_id, clock, variantId, attempt);
@@ -1550,7 +2161,7 @@ function lensPoll(slot, jobId, clock, variantId, again) {
                     failed({ error: result.error || 'Модель не ответила.' });
                     return;
                 }
-                clock.stop(lensHtml(result, variantId));
+                clock.stop(lensHtml(result, variantId, true));
                 return;
             }
             clock.set(LENS_STATE_TEXT[body.status] || body.status || 'идёт');
@@ -1563,7 +2174,11 @@ function lensPoll(slot, jobId, clock, variantId, again) {
     ask();
 }
 
-function lensHtml(body, variantId) {
+/* standalone — оценка запрошена ВРУЧНУЮ, отдельной кнопкой, а не внутри
+   конвейера. Разница не косметическая: ручной путь дальше сюжета не ведёт и
+   вести не может (сервер берёт модуль из завершённой задачи конвейера, а не со
+   слов страницы), поэтому в его конце нужен указатель, а не намёк «ушёл бы». */
+function lensHtml(body, variantId, standalone) {
     if (!body || body.error) {
         return genErrorHtml(body || { error: 'Пустой ответ' });
     }
@@ -1644,11 +2259,23 @@ function lensHtml(body, variantId) {
     }
 
     html += '<p class="gen-note">' + (passed
-        ? 'Модуль принят и по чек-листу, и по линзам — дальше по конвейеру ' +
-          'он ушёл бы на генерацию сюжета.'
+        ? 'Модуль принят и по чек-листу, и по линзам.'
         : 'Балл ниже порога: оркестратор запросил бы новый вариант механик.') +
-        '</p></div>';
+        '</p>';
 
+    /* Тупик ручного пути. Молчать о нём нельзя: человек видит принятый модуль,
+       ждёт продолжения и не получает ничего — ровно на это и жалуются. */
+    if (standalone) {
+        html += '<div class="lens-skip lens-deadend">' +
+            '<b>Это разовая проверка, а не конвейер.</b> Сюжет и особенности ' +
+            'строятся только поверх модуля, принятого <i>полным проходом</i>: ' +
+            'сервер берёт его из завершённой задачи, а не со слов страницы — ' +
+            'иначе «механики приняты» пришлось бы принимать на веру от браузера. ' +
+            'Чтобы продолжить конвейер, нажмите «Собрать модуль с проверкой».' +
+        '</div>';
+    }
+
+    html += '</div>';
     return html;
 }
 
