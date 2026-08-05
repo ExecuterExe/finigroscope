@@ -8,6 +8,7 @@
 """
 
 import json
+import traceback
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -109,6 +110,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/generate/mechanics": self.route_mechanics,
             "/api/audit/mechanics": self.route_audit_mechanics,
             "/api/lenses/module": self.route_lenses,
+            "/api/lenses/status": self.route_lens_status,
         }
         handler = routes.get(path)
         if not handler:
@@ -116,8 +118,21 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         payload = self.read_json()
-        if payload is not None:
+        if payload is None:
+            return
+
+        try:
             handler(payload)
+        except Exception as failure:                      # noqa: BLE001
+            # Любой неучтённый сбой обязан стать ОТВЕТОМ. Без этого исключение
+            # долетало до ThreadingHTTPServer, тот молча закрывал соединение, и
+            # страница получала «сервер не ответил» — неотличимо от зависшей
+            # сети. Полная трассировка идёт в консоль, наружу — тип ошибки.
+            traceback.print_exc()
+            self.send_json({"error": "Внутренняя ошибка сервера: %s. "
+                                     "Подробности в окне сервера."
+                                     % type(failure).__name__,
+                            "stage": "сервер"}, 500)
 
     def read_json(self):
         """Тело запроса как словарь. При ошибке сама отвечает и возвращает None."""
@@ -214,12 +229,26 @@ class Handler(BaseHTTPRequestHandler):
 
         phase = payload.get("phase") or "mechanics"
         try:
-            result = lens_review.evaluate(phase, module, params, audit)
+            # Только ставим в очередь. Ждать здесь нельзя: оценка идёт минутами,
+            # и обработчик, зависший на всё это время, лишает страницу
+            # возможности показать, что работа идёт. Состояние спрашивают
+            # отдельно — /api/lenses/status.
+            started = lens_review.submit(phase, module, params, audit)
         except lens_review.LensError as error:
             self.send_json({"error": str(error), "stage": "линзы"}, 502)
             return
 
-        self.send_json(result)
+        self.send_json(started)
+
+    def route_lens_status(self, payload):
+        """Состояние оценки. Страница спрашивает раз в пару секунд."""
+        try:
+            state = lens_review.poll(payload.get("job_id"))
+        except lens_review.LensError as error:
+            self.send_json({"error": str(error), "stage": "линзы"}, 502)
+            return
+
+        self.send_json(state)
 
     def route_complete(self, payload):
         messages = payload.get("messages")

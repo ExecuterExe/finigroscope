@@ -22,6 +22,7 @@
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from config import config
@@ -87,48 +88,71 @@ def _http_error(error):
     return "%s %s" % (base, detail) if detail else base
 
 
-def evaluate(phase, module, params, audit, wait=None):
-    """Ставит оценку модуля и дожидается результата.
+def submit(phase, module, params, audit):
+    """Ставит оценку в очередь и СРАЗУ возвращается, ничего не дожидаясь.
 
-    Возвращает то же, что отдаёт ФинИгроСкоп:
+    Ждать внутри обработчика запроса нельзя: линзы отвечают до 300 с, а при
+    неудачной самопроверке ответа агент делает второй заход — то есть до 600 с
+    на оценку. Столько не выдержит ни один участник цепочки: nginx рвёт запрос
+    на 300 с (proxy_read_timeout), а пользователь всё это время смотрит на
+    неподвижную строку и не знает, работает оно или зависло.
+
+    Возвращает:
       • {'ready': False, 'reason': ...} — линзы не звали, и это штатный исход:
         у аудитора остались критичные замечания, модуль сперва чинят;
-      • {'ready': True, 'available': True, 'score': {...}, 'report': {...}};
-      • {'ready': True, 'available': False, 'error': ...} — модель не ответила.
+      • {'ready': True, 'job_id': ...} — оценка принята в работу.
     """
-    started = _submit(phase, module, params, audit)
-    if not started.get("ready"):
-        return started
-
-    job_id = started.get("job_id")
-    if not job_id:
-        raise LensError("ФинИгроСкоп принял запрос, но не вернул номер задачи.")
-
-    return _await_result(job_id, wait if wait is not None else config.lens_timeout)
-
-
-def _submit(phase, module, params, audit):
-    return _request(_url(SUBMIT_PATH), {
+    started = _request(_url(SUBMIT_PATH), {
         "phase": phase,
         "module": module,
         "params": params,
         "audit": audit,
     })
+    if started.get("ready") and not started.get("job_id"):
+        raise LensError("ФинИгроСкоп принял запрос, но не вернул номер задачи.")
+    return started
+
+
+def poll(job_id):
+    """Состояние одной оценки. Не ждёт: отвечает тем, что есть сейчас.
+
+    Возвращает {'status': 'queued'|'running'|'done'|'failed', ...}; у 'done'
+    добавлено поле 'result'.
+    """
+    if not job_id:
+        raise LensError("Не указан номер задачи.")
+    # Экранируем: номер приходит снаружи, а http.client кодирует строку запроса
+    # в ASCII и на любой букве вне латиницы бросает UnicodeEncodeError. Это не
+    # ошибка ответа, а падение до отправки — обработчик обрывал бы соединение
+    # вообще без ответа, и страница показывала бы «сервер не ответил».
+    safe_id = urllib.parse.quote(str(job_id), safe="")
+    state = _request(_url("%s/%s.json" % (SUBMIT_PATH, safe_id)))
+    if state.get("status") == "failed":
+        raise LensError(state.get("error") or "Оценка по линзам не выполнена.")
+    return state
+
+
+def evaluate(phase, module, params, audit, wait=None):
+    """Заявка плюс ожидание в одном вызове.
+
+    Нужно тем, кто работает не из браузера: проверкам и разбору вручную из
+    консоли. Страница так НЕ делает — она опрашивает состояние сама, чтобы
+    показывать, сколько идёт оценка.
+    """
+    started = submit(phase, module, params, audit)
+    if not started.get("ready"):
+        return started
+    return _await_result(started["job_id"],
+                         wait if wait is not None else config.lens_timeout)
 
 
 def _await_result(job_id, wait):
     deadline = time.time() + wait
-    status_url = _url("%s/%s.json" % (SUBMIT_PATH, job_id))
 
     while True:
-        state = _request(status_url)
-        status = state.get("status")
-
-        if status == "done":
+        state = poll(job_id)
+        if state.get("status") == "done":
             return state.get("result") or {}
-        if status == "failed":
-            raise LensError(state.get("error")
-                            or "Оценка по линзам не выполнена.")
 
         if time.time() >= deadline:
             raise LensError(

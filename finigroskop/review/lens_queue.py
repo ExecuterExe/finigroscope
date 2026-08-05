@@ -83,10 +83,20 @@ def _execute(job_id: str, fn):
             return
         record["status"] = RUNNING
 
+    # В консоль — потому что оценка идёт минутами, и без этих двух строк
+    # непонятно, работает сервис или завис. Ровно этот вопрос и возник на
+    # первом живом прогоне.
+    started = time.time()
+    print("[линзы] %s: начал" % job_id, flush=True)
+
     try:
         result = fn()
         status, error = DONE, None
+        print("[линзы] %s: готово за %.0f с" % (job_id, time.time() - started),
+              flush=True)
     except Exception as failure:                     # noqa: BLE001
+        print("[линзы] %s: упал за %.0f с — %s"
+              % (job_id, time.time() - started, type(failure).__name__), flush=True)
         # Текст исключения наружу не отдаём: в нём может оказаться кусок
         # промпта или настроек. В журнал — полностью, наружу — коротко.
         traceback.print_exc()

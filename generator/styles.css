@@ -753,6 +753,13 @@ body.nav-open {
     opacity: 0.65;
 }
 
+/* Счётчик времени в строке ожидания: моноширинный, чтобы цифры не прыгали. */
+.lens-clock {
+    font-variant-numeric: tabular-nums;
+    color: var(--accent-soft);
+    font-weight: 700;
+}
+
 .lens-skip {
     padding: 14px 16px;
     background: rgba(248, 178, 106, 0.08);

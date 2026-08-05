@@ -124,6 +124,40 @@ def test_без_токена_заголовка_нет(server, monkeypatch):
 # Ожидание результата
 # --------------------------------------------------------------------------
 
+def test_заявка_возвращается_сразу_без_ожидания(server):
+    """Страница получает номер задачи мгновенно и дальше опрашивает сама.
+
+    Ждать внутри обработчика нельзя: оценка идёт до 600 с (300 на вызов плюс
+    второй заход при неудачной самопроверке), а nginx рвёт запрос на 300 с.
+    """
+    fake = server({"ready": True, "job_id": "abc"})
+    out = lens_review.submit("mechanics", MODULE, PARAMS, AUDIT)
+    assert out["job_id"] == "abc"
+    # ни одного опроса состояния: заявка и ожидание разделены
+    assert len(fake.requests) == 1
+
+
+def test_опрос_состояния_не_ждёт(server):
+    fake = server({"ready": True, "job_id": "abc"}, {"status": "running"})
+    state = lens_review.poll("abc")
+    assert state["status"] == "running"
+    assert len(fake.requests) == 1
+
+
+def test_опрос_упавшей_задачи_бросает_ошибку(server):
+    server({"ready": True, "job_id": "abc"},
+           {"status": "failed", "error": "Оценка по линзам не выполнена: ValueError"})
+    with pytest.raises(lens_review.LensError) as error:
+        lens_review.poll("abc")
+    assert "ValueError" in str(error.value)
+
+
+def test_опрос_без_номера_задачи_бросает_ошибку(server):
+    server({})
+    with pytest.raises(lens_review.LensError):
+        lens_review.poll("")
+
+
 def test_ждёт_пока_оценка_идёт(server):
     fake = server({"ready": True, "job_id": "abc"},
                   {"status": "queued"}, {"status": "running"},
@@ -207,6 +241,20 @@ def test_404_на_задаче_объясняет_причину(server):
     with pytest.raises(lens_review.LensError) as error:
         evaluate()
     assert "перезапускался" in str(error.value)
+
+
+def test_номер_задачи_экранируется_в_адресе(server):
+    """Номер приходит снаружи, а http.client кодирует строку запроса в ASCII.
+
+    На букве вне латиницы он падал ДО отправки, обработчик обрывал соединение
+    без ответа, и страница показывала «сервер не ответил» — неотличимо от
+    зависшей сети. Поймано живой проверкой, а не в бою.
+    """
+    fake = server({"ready": True, "job_id": "x"}, {"status": "running"})
+    lens_review.poll("задача-№1")
+    url = fake.requests[0]["url"]
+    assert url.isascii(), "в адресе остались символы вне ASCII: " + url
+    assert "%" in url
 
 
 def test_адрес_собирается_без_двойного_слэша(server, monkeypatch):

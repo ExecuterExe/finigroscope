@@ -1359,8 +1359,8 @@ function runLenses(module, audit, variantId) {
         return;
     }
 
-    slot.innerHTML = '<div class="gen-wait">Оцениваю модуль по линзам Шелла. ' +
-        'Агент живёт в ФинИгроСкопе, ответ занимает до нескольких минут.</div>';
+    const started = Date.now();
+    lensWait(slot, started, 'ставлю в очередь');
 
     fetch('api/lenses/module', {
         method: 'POST',
@@ -1372,14 +1372,74 @@ function runLenses(module, audit, variantId) {
             audit: audit
         })
     }).then(function(response) {
-        return response.json().then(function(body) {
-            return { status: response.status, body: body };
-        });
-    }).then(function(res) {
-        slot.innerHTML = lensHtml(res.body, variantId);
+        return response.json();
+    }).then(function(body) {
+        if (!body || body.error || body.ready === false) {
+            slot.innerHTML = lensHtml(body, variantId);
+            return;
+        }
+        lensPoll(slot, body.job_id, started, variantId);
     }).catch(function(e) {
         slot.innerHTML = genErrorHtml({ error: 'Сервер не ответил: ' + e.message });
     });
+}
+
+/* Признак жизни. Без него страница показывает одну неподвижную строку минуты
+   подряд, и отличить работу от зависания невозможно — что и случилось на первом
+   же живом прогоне. */
+const LENS_STATE_TEXT = {
+    'queued': 'в очереди',
+    'running': 'агент разбирает модуль по линзам'
+};
+
+function lensWait(slot, started, state) {
+    const seconds = Math.round((Date.now() - started) / 1000);
+    slot.innerHTML = '<div class="gen-wait">' +
+        'Оцениваю модуль по линзам Шелла — <b>' + esc(state) + '</b>, ' +
+        '<span class="lens-clock">' + seconds + ' с</span>.<br>' +
+        'Агент живёт в ФинИгроСкопе и читает модуль целиком; это занимает ' +
+        'до нескольких минут. Страница обновится сама.' +
+    '</div>';
+}
+
+function lensPoll(slot, jobId, started, variantId) {
+    let state = 'queued';
+
+    /* Счётчик тикает отдельно от опроса: опрашивать сервер каждую секунду
+       незачем, а видеть, что время идёт, нужно постоянно. */
+    const clock = setInterval(function() {
+        lensWait(slot, started, LENS_STATE_TEXT[state] || state);
+    }, 1000);
+
+    function stop(html) {
+        clearInterval(clock);
+        slot.innerHTML = html;
+    }
+
+    function ask() {
+        fetch('api/lenses/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: jobId })
+        }).then(function(response) {
+            return response.json();
+        }).then(function(body) {
+            if (!body || body.error) {
+                stop(genErrorHtml(body || { error: 'Пустой ответ' }));
+                return;
+            }
+            if (body.status === 'done') {
+                stop(lensHtml(body.result, variantId));
+                return;
+            }
+            state = body.status || state;
+            setTimeout(ask, 2000);
+        }).catch(function(e) {
+            stop(genErrorHtml({ error: 'Сервер не ответил: ' + e.message }));
+        });
+    }
+
+    ask();
 }
 
 function lensHtml(body, variantId) {
