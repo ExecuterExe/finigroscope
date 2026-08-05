@@ -4,8 +4,14 @@
     {
       "name": "finigroskop",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["app.py"],
+      "runtimeArgs": ["finigroskop/app.py"],
       "port": 5000
+    },
+    {
+      "name": "generator",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["generator/app.py"],
+      "port": 8000
     }
   ]
 }

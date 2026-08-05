@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Генератор игр — Опрос</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- фоновое свечение -->
+    <div class="glow glow-1"></div>
+    <div class="glow glow-2"></div>
+
+    <!-- шапка -->
+    <header class="topbar">
+        <div class="logo">
+            <span class="logo-dot"></span>
+            Генератор игр
+        </div>
+        <div class="topbar-actions">
+            <!-- Соседний сервис экосистемы. Адрес приходит из /api/links (его
+                 задаёт FINIGROSKOP_URL в .env): на сервере это не localhost.
+                 До ответа сервера ссылка скрыта — см. app.js. -->
+            <a class="btn ghost small" id="linkFinigroskop" hidden
+               title="Перейти к ФинИгроСкопу">&#128300; ФинИгроСкоп</a>
+            <button class="btn ghost small" id="navMain" title="Перейти к любому вопросу">
+                &#9776; Вопросы
+            </button>
+            <button class="btn ghost small" id="restartMain" title="Начать заново">&#8635; Сначала</button>
+        </div>
+    </header>
+
+    <!-- список всех вопросов: переход к любому из них -->
+    <div class="nav-panel" id="navPanel" hidden>
+        <div class="nav-backdrop" id="navBackdrop"></div>
+        <div class="nav-sheet" role="dialog" aria-label="Все вопросы">
+            <div class="nav-sheet-head">
+                <span class="nav-sheet-title">Все вопросы</span>
+                <button class="nav-close" id="navClose" type="button" aria-label="Закрыть">&times;</button>
+            </div>
+            <div class="nav-list" id="navList"></div>
+        </div>
+    </div>
+
+    <!-- прогресс -->
+    <div class="progress-wrap">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <!-- число вопросов подставляет app.js: часть вопросов условная -->
+        <span class="progress-text" id="progressText">&nbsp;</span>
+    </div>
+
+    <!-- основной экран -->
+    <main class="page">
+        <div class="screen" id="screen"></div>
+    </main>
+
+    <footer class="footer">
+        Генератор игр · опросный лист для формирования параметров игры
+    </footer>
+
+    <!-- таблица совместимости: данные, затем проверка, затем сам опросник -->
+    <script src="compat-data.js"></script>
+    <script src="compat.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

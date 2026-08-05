@@ -1,0 +1,20 @@
+[Unit]
+Description=Генератор игр
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/srv/ecosystem/generator
+
+# gunicorn здесь НЕ подходит: сервер генератора не WSGI-приложение, а собственный
+# обработчик поверх http.server (generator/app.py). Запускается как есть.
+#
+# EnvironmentFile не нужен: генератор читает свой .env сам (generator/config.py,
+# разбор без python-dotenv). Задать переменную здесь всё же можно — системное
+# окружение у него сильнее файла.
+ExecStart=/srv/ecosystem/.venv/bin/python app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,143 @@
+{
+  "version": "1.0",
+  "source": "Промпт_аудитора_модуля.md, раздел «КАРТА ПРОВЕРКИ», Слой 1",
+  "comment": "Единственный источник чек-листов. В системном промпте их нет намеренно: иначе при правке конфига промпт молча расходился бы с реальностью. Новый проход добавляется ключом в phases — код агента менять не нужно.",
+
+  "applies_when": {
+    "comment": "Как читать поле applies_when у пункта. null — пункт применим всегда. Иначе объект с ключом param и одним из условий: equals, not_equals, contains, truthy. Если условие не выполнено, пункт обязан получить статус n/a, а не ok."
+  },
+
+  "consistency_item_id": "consistency_with_previous_modules",
+
+  "phases": {
+    "mechanics": {
+      "order": 1,
+      "title": "Проверка модуля механик",
+      "module_label": "МОДУЛЬ МЕХАНИК",
+      "consistency": false,
+      "llm": {
+        "tier": "pro",
+        "thinking": false,
+        "temperature": 0.2,
+        "max_tokens": 3000,
+        "timeout": 120
+      },
+      "relevant_params": [
+        "age_group", "genre", "player_count", "play_time", "resource",
+        "win_condition", "randomness", "interaction", "elimination",
+        "catch_up", "writing_required", "components"
+      ],
+      "checklist": [
+        { "id": "age_complexity",
+          "item": "Сложность механик соответствует возрастной группе",
+          "applies_when": null },
+        { "id": "genre_match",
+          "item": "Выбранные механики относятся к заявленному жанру",
+          "applies_when": null },
+        { "id": "player_count_works",
+          "item": "Игровой цикл работает при заявленном числе игроков",
+          "applies_when": null },
+        { "id": "duration_fits",
+          "item": "Оценка длительности партии укладывается в play_time (допуск ±30%)",
+          "applies_when": null },
+        { "id": "resource_used",
+          "item": "Игровой цикл использует заявленный тип ресурса",
+          "applies_when": null },
+        { "id": "win_condition_match",
+          "item": "Условие победы в модуле соответствует win_condition",
+          "applies_when": null },
+        { "id": "randomness_respected",
+          "item": "Наличие или отсутствие случайности соответствует randomness",
+          "applies_when": null },
+        { "id": "interaction_respected",
+          "item": "Тип взаимодействия соответствует interaction",
+          "applies_when": null },
+        { "id": "elimination_respected",
+          "item": "При elimination = false в цикле нет выбывания игрока до конца партии",
+          "applies_when": { "param": "elimination", "equals": false } },
+        { "id": "catch_up_respected",
+          "item": "При catch_up = true есть явный конкретный механизм поддержки отстающих, а не декларация",
+          "applies_when": { "param": "catch_up", "equals": true } },
+        { "id": "writing_respected",
+          "item": "При writing_required = false нет записи или подсчёта на бумаге",
+          "applies_when": { "param": "writing_required", "equals": false } },
+        { "id": "components_allowed",
+          "item": "Все упомянутые компоненты входят в разрешённый список components",
+          "applies_when": null },
+        { "id": "no_story_elements",
+          "item": "Модуль не содержит элементов сюжета: имён, названий мира, лора",
+          "applies_when": null },
+        { "id": "no_component_quantities",
+          "item": "Модуль не указывает точные количества компонентов — это не его задача",
+          "applies_when": null }
+      ]
+    },
+
+    "story": {
+      "order": 2,
+      "title": "Проверка модуля сюжета и артефактов",
+      "module_label": "МОДУЛЬ СЮЖЕТА",
+      "consistency": true,
+      "consistency_against": ["mechanics"],
+      "llm": {
+        "tier": "pro",
+        "thinking": true,
+        "temperature": 0.2,
+        "max_tokens": 3000,
+        "timeout": 180
+      },
+      "relevant_params": ["genre", "world", "story", "age_group", "purpose"],
+      "checklist": [
+        { "id": "genre_world_match",
+          "item": "Жанр и сеттинг сюжета соответствуют genre и world",
+          "applies_when": null },
+        { "id": "story_depth_match",
+          "item": "Глубина проработки сюжета соответствует заявленному story (минимальный / полноценный)",
+          "applies_when": null },
+        { "id": "age_content_safe",
+          "item": "В сюжете нет контента, недопустимого для age_group (испуг, насилие, тревожные темы)",
+          "applies_when": null },
+        { "id": "purpose_learning",
+          "item": "Если purpose = обучение, сюжет служит заявленной обучающей цели",
+          "applies_when": { "param": "purpose", "contains": "Обучение" } },
+        { "id": "no_new_mechanics",
+          "item": "Сюжет не вводит новых игровых механик — не его задача",
+          "applies_when": null }
+      ]
+    },
+
+    "features": {
+      "order": 3,
+      "title": "Проверка модуля особенностей игры",
+      "module_label": "МОДУЛЬ ОСОБЕННОСТЕЙ",
+      "consistency": true,
+      "consistency_against": ["mechanics", "story"],
+      "llm": {
+        "tier": "pro",
+        "thinking": true,
+        "temperature": 0.2,
+        "max_tokens": 3000,
+        "timeout": 180
+      },
+      "relevant_params": ["complexity", "adaptation", "player_count",
+                          "elimination", "catch_up"],
+      "checklist": [
+        { "id": "complexity_match",
+          "item": "Сложность особенностей соответствует заявленному complexity",
+          "applies_when": null },
+        { "id": "adaptation_respected",
+          "item": "Особенности учитывают требования заданной adaptation",
+          "applies_when": { "param": "adaptation", "equals": true } },
+        { "id": "elimination_catchup_consistent",
+          "item": "Особенности не противоречат уже установленным elimination и catch_up",
+          "applies_when": null },
+        { "id": "player_count_range",
+          "item": "Особенности работают во всём заявленном диапазоне player_count",
+          "applies_when": null },
+        { "id": "adds_new_depth",
+          "item": "Особенности добавляют новую глубину, а не повторяют уже описанный игровой цикл",
+          "applies_when": null }
+      ]
+    }
+  }
+}

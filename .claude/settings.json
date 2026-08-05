@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./finigroskop/.env)",
+      "Read(./generator/.env)",
+      "Read(./generator/.env.local)",
+      "Read(./generator/.env.development)",
+      "Read(./generator/.env.production)",
+      "Bash(cat:*.env)",
+      "Bash(type:*.env)"
+    ]
+  }
+}

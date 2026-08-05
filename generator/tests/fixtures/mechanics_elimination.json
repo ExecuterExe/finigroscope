@@ -1,0 +1,82 @@
+{
+  "name": "Проход 1: модуль вводит выбывание при elimination=false",
+  "phase": "mechanics",
+  "expect": {
+    "passed": false,
+    "violation_items": ["elimination_respected"],
+    "critical_items": ["elimination_respected"],
+    "anomalies": 0
+  },
+
+  "params": {
+    "age_group": { "min": 6, "max": 9, "label": "6-9 лет" },
+    "genre": ["приключение"],
+    "player_count": { "min": 2, "max": 4, "label": "2-4 игрока" },
+    "play_time": { "min": 5, "max": 15, "label": "До 15 минут" },
+    "resource": ["предметы"],
+    "win_condition": ["Стратегическое планирование"],
+    "randomness": true,
+    "interaction": "кооперативное",
+    "elimination": false,
+    "catch_up": true,
+    "writing_required": false,
+    "components": ["карты", "кубики", "жетоны"],
+    "world": ["Фэнтези"],
+    "complexity": "низкая"
+  },
+
+  "module": {
+    "title": "Исследование с проверкой кубиком",
+    "core_mechanics": [{ "id": "MECH_EXPLORE_TILES", "role": "основная" }],
+    "game_loop": {
+      "turn_order": "по часовой стрелке",
+      "turn_structure": [
+        "бросить кубик",
+        "открыть карту локации",
+        "при трёх неудачах подряд игрок выбывает из партии"
+      ],
+      "progression": "колода локаций уменьшается каждый ход"
+    },
+    "win_condition": { "trigger": "3 предмета в общем запасе" },
+    "catch_up_mechanism": "Найденное кладётся в общий запас, прогресс общий для всех.",
+    "required_component_types": ["карты", "кубики", "жетоны"],
+    "estimated_duration_minutes": 12
+  },
+
+  "previous_modules": [],
+
+  "llm_response": {
+    "phase": "mechanics",
+    "map": [
+      { "item": "age_complexity", "status": "ok", "note": "простые действия подходят возрасту 6-9" },
+      { "item": "genre_match", "status": "ok", "note": "исследование локаций — приключенческая механика" },
+      { "item": "player_count_works", "status": "ok", "note": "цикл работает от 2 до 4 игроков" },
+      { "item": "duration_fits", "status": "ok", "note": "12 мин укладывается в 5-15" },
+      { "item": "resource_used", "status": "ok", "note": "предметы копятся в общем запасе" },
+      { "item": "win_condition_match", "status": "ok", "note": "победа требует совместного планирования" },
+      { "item": "randomness_respected", "status": "ok", "note": "кубик присутствует, randomness=true" },
+      { "item": "interaction_respected", "status": "ok", "note": "общий запас, общая победа" },
+      { "item": "elimination_respected", "status": "violation", "note": "цикл выводит игрока из партии при трёх неудачах" },
+      { "item": "catch_up_respected", "status": "ok", "note": "общий запас — конкретное правило" },
+      { "item": "writing_respected", "status": "ok", "note": "записей нет" },
+      { "item": "components_allowed", "status": "ok", "note": "карты, кубики, жетоны — все разрешены" },
+      { "item": "no_story_elements", "status": "ok", "note": "имён и названий мира нет" },
+      { "item": "no_component_quantities", "status": "ok", "note": "количества не названы" }
+    ],
+    "consistency": { "applicable": false, "conflicts": [] },
+    "issues": [
+      {
+        "checklist_item": "elimination_respected",
+        "severity": "critical",
+        "explanation": "Модуль описывает выбывание игрока из партии после трёх неудачных проверок, хотя elimination=false",
+        "location_hint": "game_loop.turn_structure, шаг 3"
+      }
+    ],
+    "cleaned_module": {
+      "title": "Исследование с проверкой кубиком",
+      "components": [{ "name": "карты локаций", "new": true }]
+    },
+    "passed": false,
+    "summary": "Одно критичное нарушение: выбывание игрока при запрете elimination."
+  }
+}

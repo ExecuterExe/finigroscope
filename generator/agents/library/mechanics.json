@@ -1,0 +1,241 @@
+{
+  "version": "1.0",
+  "source": "Промпт_агента_генерации_механик.md, раздел 3",
+  "comment": "Стартовый набор из документа. Чтобы покрыть все жанры опросника, нужно 40-80 механик — см. tools/check_mechanics.py, он показывает, какие жанры пока не закрыты.",
+
+  "vocabulary": {
+    "genres": ["викторина", "стратегия", "кооператив", "бродилка", "экономика",
+               "приключение", "детектив", "карточная игра", "слова и ассоциации",
+               "реакция и память", "блеф", "строительство"],
+    "interaction": ["кооперативное", "конкурентное", "косвенное", "смешанное", "соло"],
+    "resources": ["очки", "время", "карты", "деньги", "предметы", "ходы",
+                  "здоровье", "опыт", "ресурсы", "информация", "влияние"],
+    "components": ["карты", "игровое поле", "кубики", "фишки", "жетоны",
+                   "таймер", "фигурки", "телефоны", "бумага и карандаш"],
+    "randomness": ["требует", "допускает", "исключает"],
+    "complexity": ["низкая", "средняя", "высокая"]
+  },
+
+  "mechanics": [
+    {
+      "id": "MECH_EXPLORE_TILES",
+      "name": "Исследование локаций",
+      "description": "Игроки по очереди открывают закрытые карты или тайлы, раскрывая игровое пространство по ходу партии.",
+      "loop_role": "основная",
+      "requires_components": ["карты"],
+      "optional_components": ["жетоны", "фишки"],
+      "tags": {
+        "genres": ["приключение", "детектив", "бродилка", "кооператив"],
+        "age_min": 5,
+        "age_max": 99,
+        "resources": ["предметы", "карты", "информация"],
+        "interaction": ["кооперативное", "конкурентное", "косвенное", "смешанное", "соло"],
+        "randomness": "требует",
+        "complexity": ["низкая", "средняя"],
+        "causes_elimination": false,
+        "supports_catch_up": true,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_COLLECT_SHARED", "MECH_DICE_CHECK", "MECH_TIMER_PRESSURE"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_COLLECT_SHARED",
+      "name": "Совместный сбор в общий запас",
+      "description": "Добытое любым игроком попадает в общую копилку и доступно всей команде; прогресс считается на всех сразу.",
+      "loop_role": "дополнительная",
+      "requires_components": ["жетоны"],
+      "optional_components": ["карты"],
+      "tags": {
+        "genres": ["кооператив", "приключение", "строительство", "экономика"],
+        "age_min": 5,
+        "age_max": 99,
+        "resources": ["предметы", "ресурсы", "очки", "информация"],
+        "interaction": ["кооперативное", "смешанное"],
+        "randomness": "допускает",
+        "complexity": ["низкая", "средняя"],
+        "causes_elimination": false,
+        "supports_catch_up": true,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_EXPLORE_TILES", "MECH_DICE_CHECK", "MECH_ACTION_SELECTION"],
+      "conflicts_with": ["MECH_COLLECT_PERSONAL"]
+    },
+    {
+      "id": "MECH_COLLECT_PERSONAL",
+      "name": "Личный сбор ресурсов",
+      "description": "Каждый игрок копит собственный запас; чужой запас недоступен, сравнение идёт в конце партии.",
+      "loop_role": "дополнительная",
+      "requires_components": ["жетоны"],
+      "optional_components": ["карты", "фишки"],
+      "tags": {
+        "genres": ["экономика", "стратегия", "приключение", "строительство", "карточная игра"],
+        "age_min": 6,
+        "age_max": 99,
+        "resources": ["ресурсы", "деньги", "предметы", "очки", "опыт"],
+        "interaction": ["конкурентное", "косвенное", "смешанное", "соло"],
+        "randomness": "допускает",
+        "complexity": ["низкая", "средняя", "высокая"],
+        "causes_elimination": false,
+        "supports_catch_up": false,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_SET_COLLECTION", "MECH_ACTION_SELECTION", "MECH_HAND_MANAGEMENT"],
+      "conflicts_with": ["MECH_COLLECT_SHARED"]
+    },
+    {
+      "id": "MECH_DICE_CHECK",
+      "name": "Проверка действия броском кубика",
+      "description": "Успех заявленного действия определяется броском кубика с заранее известным порогом.",
+      "loop_role": "дополнительная",
+      "requires_components": ["кубики"],
+      "optional_components": [],
+      "tags": {
+        "genres": ["приключение", "бродилка", "стратегия", "кооператив", "детектив"],
+        "age_min": 5,
+        "age_max": 99,
+        "resources": ["предметы", "здоровье", "очки", "ходы"],
+        "interaction": ["кооперативное", "конкурентное", "косвенное", "смешанное", "соло"],
+        "randomness": "требует",
+        "complexity": ["низкая", "средняя"],
+        "causes_elimination": false,
+        "supports_catch_up": false,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_EXPLORE_TILES", "MECH_RACE_TRACK", "MECH_PUSH_YOUR_LUCK"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_HAND_MANAGEMENT",
+      "name": "Управление рукой карт",
+      "description": "Игрок держит несколько карт и решает, какую разыграть сейчас, а какую придержать; рука пополняется по правилу.",
+      "loop_role": "основная",
+      "requires_components": ["карты"],
+      "optional_components": ["жетоны"],
+      "tags": {
+        "genres": ["карточная игра", "экономика", "стратегия", "детектив", "блеф"],
+        "age_min": 8,
+        "age_max": 99,
+        "resources": ["карты", "деньги", "очки", "информация", "влияние"],
+        "interaction": ["конкурентное", "косвенное", "смешанное", "кооперативное", "соло"],
+        "randomness": "допускает",
+        "complexity": ["средняя", "высокая"],
+        "causes_elimination": false,
+        "supports_catch_up": false,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_SET_COLLECTION", "MECH_COLLECT_PERSONAL", "MECH_ACTION_SELECTION"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_RACE_TRACK",
+      "name": "Продвижение по дорожке",
+      "description": "Фишки игроков двигаются по общей дорожке к финишу; положение на дорожке показывает прогресс.",
+      "loop_role": "основная",
+      "requires_components": ["игровое поле", "фишки"],
+      "optional_components": ["кубики"],
+      "tags": {
+        "genres": ["бродилка", "приключение", "реакция и память", "кооператив"],
+        "age_min": 4,
+        "age_max": 99,
+        "resources": ["ходы", "очки", "предметы"],
+        "interaction": ["конкурентное", "косвенное", "смешанное", "кооперативное", "соло"],
+        "randomness": "допускает",
+        "complexity": ["низкая", "средняя"],
+        "causes_elimination": false,
+        "supports_catch_up": true,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_DICE_CHECK", "MECH_ACTION_SELECTION", "MECH_TIMER_PRESSURE"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_SET_COLLECTION",
+      "name": "Сбор наборов",
+      "description": "Ценность имеют не отдельные карты или жетоны, а собранные из них комплекты по заданному признаку.",
+      "loop_role": "основная",
+      "requires_components": ["карты"],
+      "optional_components": ["жетоны"],
+      "tags": {
+        "genres": ["карточная игра", "экономика", "слова и ассоциации", "стратегия", "приключение"],
+        "age_min": 6,
+        "age_max": 99,
+        "resources": ["карты", "предметы", "очки", "ресурсы"],
+        "interaction": ["конкурентное", "косвенное", "смешанное", "кооперативное", "соло"],
+        "randomness": "допускает",
+        "complexity": ["низкая", "средняя", "высокая"],
+        "causes_elimination": false,
+        "supports_catch_up": false,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_HAND_MANAGEMENT", "MECH_COLLECT_PERSONAL", "MECH_EXPLORE_TILES"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_PUSH_YOUR_LUCK",
+      "name": "Риск-менеджмент «ещё раз или стоп»",
+      "description": "Игрок решает, остановиться с накопленным за ход или рискнуть ради большего и потерять накопленное за этот ход.",
+      "loop_role": "основная",
+      "requires_components": ["кубики"],
+      "optional_components": ["карты", "жетоны"],
+      "tags": {
+        "genres": ["приключение", "реакция и память", "экономика", "бродилка"],
+        "age_min": 6,
+        "age_max": 99,
+        "resources": ["очки", "предметы", "ресурсы", "здоровье"],
+        "interaction": ["конкурентное", "косвенное", "смешанное", "соло"],
+        "randomness": "требует",
+        "complexity": ["низкая", "средняя"],
+        "causes_elimination": false,
+        "supports_catch_up": true,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_DICE_CHECK", "MECH_COLLECT_PERSONAL"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_TIMER_PRESSURE",
+      "name": "Ограничение по времени или ходам",
+      "description": "Ход или партия ограничены таймером либо жёстким лимитом ходов, что заставляет решать быстро.",
+      "loop_role": "дополнительная",
+      "requires_components": ["таймер"],
+      "optional_components": [],
+      "tags": {
+        "genres": ["реакция и память", "викторина", "слова и ассоциации", "приключение", "кооператив"],
+        "age_min": 6,
+        "age_max": 99,
+        "resources": ["время", "ходы", "очки"],
+        "interaction": ["кооперативное", "конкурентное", "косвенное", "смешанное", "соло"],
+        "randomness": "допускает",
+        "complexity": ["низкая", "средняя"],
+        "causes_elimination": false,
+        "supports_catch_up": false,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_EXPLORE_TILES", "MECH_RACE_TRACK", "MECH_SET_COLLECTION"],
+      "conflicts_with": []
+    },
+    {
+      "id": "MECH_ACTION_SELECTION",
+      "name": "Выбор действия из списка",
+      "description": "В свой ход игрок выбирает одно действие из фиксированного открытого списка; выбор полностью определяет результат.",
+      "loop_role": "основная",
+      "requires_components": [],
+      "optional_components": ["игровое поле", "карты", "жетоны"],
+      "tags": {
+        "genres": ["стратегия", "экономика", "строительство", "кооператив", "приключение"],
+        "age_min": 7,
+        "age_max": 99,
+        "resources": ["ходы", "ресурсы", "очки", "деньги", "влияние", "опыт"],
+        "interaction": ["кооперативное", "конкурентное", "косвенное", "смешанное", "соло"],
+        "randomness": "допускает",
+        "complexity": ["средняя", "высокая"],
+        "causes_elimination": false,
+        "supports_catch_up": false,
+        "requires_writing": false
+      },
+      "pairs_well_with": ["MECH_COLLECT_PERSONAL", "MECH_COLLECT_SHARED", "MECH_HAND_MANAGEMENT"],
+      "conflicts_with": []
+    }
+  ]
+}

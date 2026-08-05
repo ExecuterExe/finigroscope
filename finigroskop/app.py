@@ -68,6 +68,10 @@ load_dotenv()
 # константой, и тестовый прогон работал с тем же файлом, что живой сервер.
 UPLOAD_DIR = config.upload_dir()
 
+# Адрес соседнего сервиса экосистемы. В шаблон его зашивать нельзя: в разработке
+# это отдельный порт, а на сервере — путь за тем же nginx (см. deploy/).
+GENERATOR_URL = os.environ.get("GENERATOR_URL", "http://localhost:8000")
+
 # --- создание приложения ----------------------------------------------------
 app = Flask(__name__)
 app.config.update(
@@ -176,6 +180,7 @@ def inject_user():
         "current_user": current_user(),
         "auth_disabled": AUTH_DISABLED,
         "llm_active_title": llm_provider.provider_class(name).TITLE,
+        "generator_url": GENERATOR_URL,
     }
 
 

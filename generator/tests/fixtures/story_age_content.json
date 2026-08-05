@@ -1,0 +1,65 @@
+{
+  "name": "Проход 2: пугающий сюжет при age_group 3-5",
+  "phase": "story",
+  "expect": {
+    "passed": false,
+    "violation_items": ["age_content_safe"],
+    "critical_items": ["age_content_safe"],
+    "na_items": ["purpose_learning"],
+    "anomalies": 0
+  },
+
+  "params": {
+    "genre": ["приключение"],
+    "world": ["Фэнтези"],
+    "story": "полноценный сюжет",
+    "age_group": { "min": 3, "max": 5, "label": "3-5 лет" },
+    "purpose": ["Развлечение"]
+  },
+
+  "module": {
+    "title": "Погоня в тёмном лесу",
+    "hook": "Ночью за детьми по лесу гонится злой колдун; если он догонит игрока, тот исчезает навсегда.",
+    "locations": ["тёмный лес", "заброшенная хижина"],
+    "artifacts": ["фонарь", "оберег"]
+  },
+
+  "previous_modules": [
+    {
+      "phase": "mechanics",
+      "module": {
+        "title": "Исследование локаций",
+        "components": [{ "name": "карты локаций", "new": true }]
+      }
+    }
+  ],
+
+  "llm_response": {
+    "phase": "story",
+    "map": [
+      { "item": "genre_world_match", "status": "ok", "note": "фэнтезийное приключение соответствует genre и world" },
+      { "item": "story_depth_match", "status": "ok", "note": "есть завязка, локации и артефакты — уровень «полноценный сюжет»" },
+      { "item": "age_content_safe", "status": "violation", "note": "погоня ночью и исчезновение персонажа навсегда — пугающий контент для 3-5 лет" },
+      { "item": "purpose_learning", "status": "n/a", "note": "purpose=Развлечение, обучающая цель не заявлена" },
+      { "item": "no_new_mechanics", "status": "ok", "note": "новых правил сюжет не вводит" }
+    ],
+    "consistency": {
+      "applicable": true,
+      "conflicts": []
+    },
+    "issues": [
+      {
+        "checklist_item": "age_content_safe",
+        "severity": "critical",
+        "explanation": "Сюжет описывает ночную погоню с угрозой исчезновения персонажа при age_group 3-5, что нарушает ограничение на пугающий контент для этой возрастной группы",
+        "location_hint": "hook"
+      }
+    ],
+    "cleaned_module": {
+      "title": "Погоня в тёмном лесу",
+      "components": [{ "name": "фонарь", "new": true }, { "name": "оберег", "new": true }]
+    },
+    "passed": false,
+    "summary": "Одно критичное нарушение: пугающий сюжет для возрастной группы 3-5."
+  }
+}

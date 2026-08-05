@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ответ агента «Аудитор модуля»",
+  "type": "object",
+  "required": ["phase", "map", "consistency", "issues", "cleaned_module", "passed", "summary"],
+  "additionalProperties": true,
+  "properties": {
+    "phase": { "type": "string" },
+
+    "map": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["item", "status"],
+        "properties": {
+          "item": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["ok", "concern", "violation", "n/a"] },
+          "note": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+
+    "consistency": {
+      "type": "object",
+      "required": ["applicable", "conflicts"],
+      "properties": {
+        "applicable": { "type": "boolean" },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["previous_module", "conflict"],
+            "properties": {
+              "previous_module": { "type": "string" },
+              "conflict": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "issues": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["checklist_item", "severity", "explanation"],
+        "properties": {
+          "checklist_item": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["critical", "minor"] },
+          "explanation": { "type": "string", "minLength": 1 },
+          "location_hint": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+
+    "cleaned_module": { "type": "object" },
+    "passed": { "type": "boolean" },
+    "summary": { "type": "string" }
+  }
+}

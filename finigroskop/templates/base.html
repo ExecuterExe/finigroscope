@@ -15,6 +15,10 @@
             <span class="brand-name">ФинИгроСкоп</span>
         </a>
         <nav class="site-nav">
+            {# Соседний сервис экосистемы. Адрес — из окружения (GENERATOR_URL),
+               потому что в разработке это порт, а на сервере путь за nginx. #}
+            <a class="btn btn-ghost" href="{{ generator_url }}"
+               title="Перейти к генератору игр">🎲 Генератор игр</a>
             <a class="btn btn-ghost" href="{{ url_for('dashboard') }}">Кабинет</a>
             <a class="btn btn-ghost nav-llm" href="{{ url_for('llm_settings_page') }}"
                title="Какой ИИ используется сервисом">

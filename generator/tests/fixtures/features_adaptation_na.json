@@ -1,0 +1,63 @@
+{
+  "name": "n/a: adaptation не задана — пункт неприменим, но обязан быть в map",
+  "phase": "features",
+  "expect": {
+    "passed": true,
+    "violation_items": [],
+    "na_items": ["adaptation_respected"],
+    "na_not_in_issues": true,
+    "anomalies": 0
+  },
+
+  "params": {
+    "complexity": "низкая",
+    "adaptation": false,
+    "player_count": { "min": 2, "max": 4, "label": "2-4 игрока" },
+    "elimination": false,
+    "catch_up": true
+  },
+
+  "module": {
+    "title": "Общая копилка и подсказки",
+    "features": [
+      "Найденное складывается в общую копилку, прогресс одинаков для всех.",
+      "Игрок, у которого меньше всех находок, может попросить подсказку у команды."
+    ]
+  },
+
+  "previous_modules": [
+    {
+      "phase": "mechanics",
+      "module": {
+        "title": "Совместный сбор предметов",
+        "components": [{ "name": "карты локаций", "new": true }]
+      }
+    },
+    {
+      "phase": "story",
+      "module": {
+        "title": "Поиск амулета",
+        "components": [{ "name": "жетон-ключ", "new": true }]
+      }
+    }
+  ],
+
+  "llm_response": {
+    "phase": "features",
+    "map": [
+      { "item": "complexity_match", "status": "ok", "note": "два простых правила — низкая сложность" },
+      { "item": "adaptation_respected", "status": "n/a", "note": "adaptation = нет, проверка адаптации особенностей неприменима" },
+      { "item": "elimination_catchup_consistent", "status": "ok", "note": "выбывания нет, подсказка поддерживает отстающего" },
+      { "item": "player_count_range", "status": "ok", "note": "работает от 2 до 4" },
+      { "item": "adds_new_depth", "status": "ok", "note": "подсказка — новое правило, в цикле её не было" }
+    ],
+    "consistency": { "applicable": true, "conflicts": [] },
+    "issues": [],
+    "cleaned_module": {
+      "title": "Общая копилка и подсказки",
+      "components": []
+    },
+    "passed": true,
+    "summary": "Нарушений нет. Проверка адаптации неприменима: параметр не задан."
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "name": "Слой 2: сюжет переименовывает жетон из механик под новым названием",
+  "phase": "story",
+  "expect": {
+    "passed": true,
+    "violation_items": [],
+    "consistency_applicable": true,
+    "conflicts_min": 1,
+    "conflict_mentions": ["кристалл судьбы", "ключ"],
+    "minor_items": ["consistency_with_previous_modules"],
+    "na_items": ["purpose_learning"],
+    "anomalies": 0
+  },
+
+  "params": {
+    "genre": ["приключение"],
+    "world": ["Фэнтези"],
+    "story": "полноценный сюжет",
+    "age_group": { "min": 9, "max": 12, "label": "9-12 лет" },
+    "purpose": ["Развлечение"]
+  },
+
+  "module": {
+    "title": "Кристалл судьбы",
+    "hook": "Игроки ищут кристалл судьбы, открывающий сундук с амулетом.",
+    "artifacts": ["кристалл судьбы"]
+  },
+
+  "previous_modules": [
+    {
+      "phase": "mechanics",
+      "module": {
+        "title": "Совместный сбор предметов",
+        "components": [
+          { "name": "карты локаций", "new": true },
+          { "name": "жетон-ключ (открывает сундук)", "new": true }
+        ]
+      }
+    }
+  ],
+
+  "llm_response": {
+    "phase": "story",
+    "map": [
+      { "item": "genre_world_match", "status": "ok", "note": "фэнтезийное приключение" },
+      { "item": "story_depth_match", "status": "ok", "note": "завязка и артефакт описаны" },
+      { "item": "age_content_safe", "status": "ok", "note": "тревожного содержания нет" },
+      { "item": "purpose_learning", "status": "n/a", "note": "purpose=Развлечение" },
+      { "item": "no_new_mechanics", "status": "ok", "note": "новых правил нет" }
+    ],
+    "consistency": {
+      "applicable": true,
+      "conflicts": [
+        {
+          "previous_module": "mechanics",
+          "conflict": "Артефакт «кристалл судьбы» выполняет ту же роль, что жетон «ключ» из модуля механик — открывает сундук; похоже на переименование одного предмета под новым названием"
+        }
+      ]
+    },
+    "issues": [
+      {
+        "checklist_item": "consistency_with_previous_modules",
+        "severity": "minor",
+        "explanation": "«Кристалл судьбы» дублирует «жетон-ключ» по функции; нужно либо явно связать названия, либо убрать дубль",
+        "location_hint": "artifacts"
+      }
+    ],
+    "cleaned_module": {
+      "title": "Кристалл судьбы",
+      "components": [
+        { "name": "жетон-ключ (в сюжете — «кристалл судьбы»)", "new": false }
+      ]
+    },
+    "passed": true,
+    "summary": "Найден один некритичный дубль компонента, устранён в cleaned_module."
+  }
+}

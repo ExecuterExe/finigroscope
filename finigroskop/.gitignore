@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.db
+*.sqlite3
+instance/
+.venv/
+venv/
+env/
+.env
+.DS_Store
+*.log
+uploads/
+# Загрузки тестового прогона: у него своя папка, как и своя база (config.py).
+uploads-test/
+tests/sample.docx
+llm_cache/
+.cache/

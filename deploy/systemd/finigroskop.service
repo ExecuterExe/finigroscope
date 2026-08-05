@@ -1,0 +1,26 @@
+[Unit]
+Description=ФинИгроСкоп
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/srv/ecosystem/finigroskop
+EnvironmentFile=/srv/ecosystem/finigroskop/.env
+
+# ОДИН воркер. Очередь фоновых задач живёт ВНУТРИ процесса (finigroskop/jobs.py):
+# при нескольких воркерах у каждого будет своя, и статус задачи придёт не от того
+# процесса, который её считает. Больше одного воркера — только вместе с настоящей
+# внешней очередью.
+#
+# --timeout 900: шаг конвейера ждёт ответа модели и может идти минутами;
+# умолчание gunicorn (30 с) убивало бы воркер прямо посреди работы.
+#
+# Рабочий каталог — сам finigroskop/, поэтому app:app находится без ухищрений:
+# gunicorn кладёт текущий каталог в sys.path. Запускать из /srv/ecosystem нельзя
+# — рядом лежит generator/ со своим модулем верхнего уровня config.
+ExecStart=/srv/ecosystem/.venv/bin/gunicorn -w 1 -b 127.0.0.1:5000 --timeout 900 app:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,85 @@
+{
+  "name": "Проход 3: особенности отменяют запрет выбывания из модуля механик",
+  "phase": "features",
+  "expect": {
+    "passed": false,
+    "violation_items": ["elimination_catchup_consistent"],
+    "critical_items": ["elimination_catchup_consistent"],
+    "na_items": ["adaptation_respected"],
+    "anomalies": 0
+  },
+
+  "params": {
+    "complexity": "низкая",
+    "adaptation": false,
+    "player_count": { "min": 2, "max": 4, "label": "2-4 игрока" },
+    "elimination": false,
+    "catch_up": true
+  },
+
+  "module": {
+    "title": "Штрафы за ошибки",
+    "features": [
+      "За три ошибки подряд игрок откладывает свою фишку и дальше только наблюдает.",
+      "Лидер получает дополнительный ход за каждые пять очков отрыва."
+    ]
+  },
+
+  "previous_modules": [
+    {
+      "phase": "mechanics",
+      "module": {
+        "title": "Исследование локаций",
+        "note": "выбывания нет, прогресс общий",
+        "components": [{ "name": "карты локаций", "new": true }]
+      }
+    },
+    {
+      "phase": "story",
+      "module": {
+        "title": "Поиск общего запаса",
+        "components": [{ "name": "жетон-ключ", "new": true }]
+      }
+    }
+  ],
+
+  "llm_response": {
+    "phase": "features",
+    "map": [
+      { "item": "complexity_match", "status": "ok", "note": "правила простые, соответствуют низкой сложности" },
+      { "item": "adaptation_respected", "status": "n/a", "note": "adaptation не задана, проверка неприменима" },
+      { "item": "elimination_catchup_consistent", "status": "violation", "note": "игрок перестаёт играть после трёх ошибок, а бонус лидеру работает против catch_up" },
+      { "item": "player_count_range", "status": "ok", "note": "правила работают от 2 до 4 игроков" },
+      { "item": "adds_new_depth", "status": "concern", "note": "второе правило по сути дублирует подсчёт очков из модуля механик" }
+    ],
+    "consistency": {
+      "applicable": true,
+      "conflicts": [
+        {
+          "previous_module": "mechanics",
+          "conflict": "Модуль механик фиксирует отсутствие выбывания и общий прогресс, а особенности выводят игрока из партии после трёх ошибок"
+        }
+      ]
+    },
+    "issues": [
+      {
+        "checklist_item": "elimination_catchup_consistent",
+        "severity": "critical",
+        "explanation": "Особенности выводят игрока из активной игры после трёх ошибок при elimination=false и дают лидеру дополнительный ход при catch_up=true",
+        "location_hint": "features[0], features[1]"
+      },
+      {
+        "checklist_item": "adds_new_depth",
+        "severity": "minor",
+        "explanation": "Правило про отрыв лидера повторяет подсчёт очков, уже описанный в модуле механик",
+        "location_hint": "features[1]"
+      }
+    ],
+    "cleaned_module": {
+      "title": "Штрафы за ошибки",
+      "components": []
+    },
+    "passed": false,
+    "summary": "Критичное противоречие с elimination и catch_up из модуля механик."
+  }
+}
