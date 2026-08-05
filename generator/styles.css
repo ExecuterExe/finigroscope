@@ -760,6 +760,35 @@ body.nav-open {
     font-weight: 700;
 }
 
+/* Строка с кнопкой повтора: кнопка и пояснение в одну линию. */
+.lens-retry-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 14px 0 10px;
+}
+
+/* Человеческая подсказка идёт ПЕРЕД полным текстом ошибки и заметнее его:
+   в сообщении провайдера пять одинаковых стеков, и читать их незачем. */
+.lens-hint {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.lens-raw summary {
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 13px;
+}
+
+.lens-raw .compat-note {
+    margin-top: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
 .lens-skip {
     padding: 14px 16px;
     background: rgba(248, 178, 106, 0.08);

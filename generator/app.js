@@ -1359,36 +1359,130 @@ function runLenses(module, audit, variantId) {
         return;
     }
 
-    const clock = lensClock(slot, 'ставлю в очередь');
+    /* Повтор нужен именно здесь. Оценка запускается САМА после аудита, поэтому
+       при сбое (упавший DNS, перегруженный провайдер, оборванная сеть) на
+       экране оставалось мёртвое сообщение: у пользователя не было ни одной
+       кнопки, а единственным способом попробовать снова был повторный аудит —
+       то есть лишний платный вызов ради шага, который к делу не относится. */
+    function attempt() {
+        const clock = lensClock(slot, 'ставлю в очередь');
 
-    fetch('api/lenses/module', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            phase: 'mechanics',
-            answers: answers,
-            module: module,
-            audit: audit
-        })
-    }).then(function(response) {
-        return response.json();
-    }).then(function(body) {
-        if (!body || body.error || body.ready === false) {
-            clock.stop(lensHtml(body, variantId));
-            return;
+        function failed(body) {
+            clock.stop(lensFailHtml(body));
+            bindLensRetry(slot, attempt);
         }
-        /* Готовый результат вместо номера задачи означает сервер со старой
-           схемой, где ожидание шло внутри запроса. Показываем, что пришло:
-           ронять уже полученную (и оплаченную) оценку из-за версии сервера
-           было бы обиднее всего. */
-        if (!body.job_id) {
-            clock.stop(lensHtml(body, variantId));
-            return;
+
+        fetch('api/lenses/module', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                phase: 'mechanics',
+                answers: answers,
+                module: module,
+                audit: audit
+            })
+        }).then(function(response) {
+            return response.json();
+        }).then(function(body) {
+            if (!body || body.error) {
+                failed(body || { error: 'Пустой ответ' });
+                return;
+            }
+            /* ready:false — это не сбой, а штатный исход: у аудитора остались
+               критичные замечания. Повторять нечего, чинить надо модуль. */
+            if (body.ready === false) {
+                clock.stop(lensHtml(body, variantId));
+                return;
+            }
+            /* Готовый результат вместо номера задачи означает сервер со старой
+               схемой, где ожидание шло внутри запроса. Показываем, что пришло:
+               ронять уже полученную (и оплаченную) оценку из-за версии сервера
+               было бы обиднее всего. */
+            if (!body.job_id) {
+                clock.stop(lensHtml(body, variantId));
+                return;
+            }
+            lensPoll(slot, body.job_id, clock, variantId, attempt);
+        }).catch(function(e) {
+            failed({ error: 'Сервер не ответил: ' + e.message });
+        });
+    }
+
+    attempt();
+}
+
+/* Подсказки по тексту ошибки. Сообщение провайдера точное, но нечитаемое:
+   пять повторов одного и того же стека на полстраницы. Человеку нужно знать
+   одно — его это беда или наша, и стоит ли жать «повторить». */
+const LENS_HINTS = [
+    {
+        marks: ['getaddrinfo', 'NameResolutionError', 'Failed to resolve',
+                'Temporary failure in name resolution'],
+        text: 'Не сработал DNS: машина в этот момент не смогла найти адрес ' +
+              'openrouter.ai. Обычно это пропадает само за несколько секунд. ' +
+              'Проверьте интернет и нажмите «Повторить оценку».'
+    },
+    {
+        marks: ['EOF occurred in violation of protocol', 'Connection reset',
+                'Connection aborted', 'Max retries exceeded'],
+        text: 'Соединение с провайдером оборвалось. Это временный сбой — ' +
+              'повторите оценку.'
+    },
+    {
+        marks: ['429', 'перегружен', 'слишком много запросов'],
+        text: 'Провайдер сейчас перегружен. Подождите полминуты и повторите.'
+    },
+    {
+        marks: ['LENS_API_TOKEN', '403'],
+        text: 'ФинИгроСкоп отклонил запрос. Проверьте, что LENS_API_TOKEN ' +
+              'одинаковый в .env обоих сервисов.'
+    },
+    {
+        marks: ['LENS_API_URL', 'недоступен'],
+        text: 'ФинИгроСкоп не отвечает. Проверьте, что он запущен: ' +
+              'python finigroskop/app.py'
+    }
+];
+
+function lensHint(text) {
+    const haystack = String(text || '');
+    for (let i = 0; i < LENS_HINTS.length; i++) {
+        const rule = LENS_HINTS[i];
+        for (let j = 0; j < rule.marks.length; j++) {
+            if (haystack.indexOf(rule.marks[j]) !== -1) return rule.text;
         }
-        lensPoll(slot, body.job_id, clock, variantId);
-    }).catch(function(e) {
-        clock.stop(genErrorHtml({ error: 'Сервер не ответил: ' + e.message }));
-    });
+    }
+    return '';
+}
+
+function lensFailHtml(body) {
+    const message = (body && body.error) || 'Неизвестная ошибка.';
+    const hint = lensHint(message);
+
+    return '<div class="compat compat-hard">' +
+        '<div class="compat-title">Оценка по линзам не выполнена</div>' +
+        (hint ? '<p class="compat-note lens-hint">' + esc(hint) + '</p>' : '') +
+        '<div class="lens-retry-row">' +
+            '<button class="btn small" type="button" id="lensRetry">' +
+                '&#8635; Повторить оценку</button>' +
+            '<span class="compat-hint">Аудит переделывать не нужно — ' +
+                'повторяется только оценка по линзам.</span>' +
+        '</div>' +
+        /* Полный текст прячем, но не выбрасываем: по нему видно, какие модели
+           перебирались и на чём именно всё встало. */
+        '<details class="lens-raw"><summary>Полный текст ошибки</summary>' +
+            '<p class="compat-note">' + esc(message) + '</p></details>' +
+    '</div>';
+}
+
+function bindLensRetry(slot, again) {
+    const button = slot.querySelector('#lensRetry');
+    if (!button) return;
+    button.onclick = function() {
+        button.disabled = true;
+        button.textContent = 'Повторяю...';
+        again();
+    };
 }
 
 /* Признак жизни. Без него страница показывает одну неподвижную строку минуты
@@ -1429,9 +1523,10 @@ function lensClock(slot, state) {
     };
 }
 
-function lensPoll(slot, jobId, clock, variantId) {
-    function stop(html) {
-        clock.stop(html);
+function lensPoll(slot, jobId, clock, variantId, again) {
+    function failed(body) {
+        clock.stop(lensFailHtml(body));
+        bindLensRetry(slot, again);
     }
 
     function ask() {
@@ -1443,17 +1538,25 @@ function lensPoll(slot, jobId, clock, variantId) {
             return response.json();
         }).then(function(body) {
             if (!body || body.error) {
-                stop(genErrorHtml(body || { error: 'Пустой ответ' }));
+                failed(body || { error: 'Пустой ответ' });
                 return;
             }
             if (body.status === 'done') {
-                stop(lensHtml(body.result, variantId));
+                const result = body.result || {};
+                /* Модель могла не ответить — тогда задача завершилась успешно,
+                   а оценки в ней нет. Это тоже повод показать кнопку: повторять
+                   надо именно оценку, а не весь аудит. */
+                if (result.available === false) {
+                    failed({ error: result.error || 'Модель не ответила.' });
+                    return;
+                }
+                clock.stop(lensHtml(result, variantId));
                 return;
             }
             clock.set(LENS_STATE_TEXT[body.status] || body.status || 'идёт');
             setTimeout(ask, 2000);
         }).catch(function(e) {
-            stop(genErrorHtml({ error: 'Сервер не ответил: ' + e.message }));
+            failed({ error: 'Сервер не ответил: ' + e.message });
         });
     }
 
