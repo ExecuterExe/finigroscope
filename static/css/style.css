@@ -991,3 +991,28 @@ a { color: var(--accent-soft); text-decoration: none; }
 @media (max-width: 520px) {
     .site-header { flex-direction: column; gap: 12px; }
 }
+
+/* ---------- фоновые задачи: плашка идущего шага ---------- */
+/* Прогресс намеренно текстовый: сколько процентов занял вызов модели, не знает
+   никто, и ползущая полоса была бы выдуманным числом. */
+.job-card {
+    margin: 0 0 18px; padding: 14px 18px; border-radius: 14px;
+    background: rgba(77,159,255,0.07); border: 1px solid rgba(77,159,255,0.3);
+}
+.job-card-failed { background: rgba(255,111,111,0.08); border-color: rgba(255,111,111,0.38); }
+.job-card-cancelled { background: rgba(255,196,80,0.08); border-color: rgba(255,196,80,0.35); }
+.job-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.job-title { font-weight: 700; }
+.job-status { margin-left: auto; color: var(--text-dim); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.job-note { margin-top: 6px; color: var(--text-dim); font-size: 0.88rem; line-height: 1.5; }
+.job-note-warn { color: #ffd47a; }
+.job-cancel { margin-top: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.job-spinner {
+    width: 14px; height: 14px; border-radius: 50%; flex: none;
+    border: 2px solid rgba(77,159,255,0.28); border-top-color: var(--accent);
+    animation: job-spin 0.9s linear infinite;
+}
+@keyframes job-spin { to { transform: rotate(360deg); } }
+/* Уважаем системную настройку «меньше движения»: крутилка — украшение, а не
+   носитель смысла, время шага показано текстом рядом. */
+@media (prefers-reduced-motion: reduce) { .job-spinner { animation: none; } }

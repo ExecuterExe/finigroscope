@@ -99,6 +99,83 @@ class Report(db.Model):
         return json.loads(self.result_json)
 
 
+class Job(db.Model):
+    """Фоновая задача — один шаг конвейера, выполняемый вне запроса.
+
+    Появилась потому, что все обращения к языковой модели шли СИНХРОННО внутри
+    обработчика: проход диагноста занимал 126 и 352 секунды, разбор по линзам —
+    564. Всё это время браузер ждал, а однопоточный сервер разработки не мог
+    обслужить никого другого. Ни прогресса, ни отмены, ни возможности закрыть
+    вкладку и вернуться — запрос просто висел.
+
+    Здесь хранится ТОЛЬКО состояние выполнения. Сам результат по-прежнему живёт
+    в таблице своего шага (MirrorSession, GameSpec, BalanceReport и так далее):
+    задача — это про «идёт/готово/упало», а не про данные. Поэтому у задачи нет
+    поля с результатом — есть шаг, документ и игра, а по ним результат всегда
+    находится там, где его ищут все остальные части сервиса.
+    """
+
+    __tablename__ = "jobs"
+
+    QUEUED = "queued"        # поставлена в очередь, ещё не взята в работу
+    RUNNING = "running"      # выполняется прямо сейчас
+    DONE = "done"            # успешно завершена
+    FAILED = "failed"        # упала или прервана перезапуском сервера
+    CANCELLED = "cancelled"  # отменена автором
+
+    ACTIVE = (QUEUED, RUNNING)
+    FINAL = (DONE, FAILED, CANCELLED)
+
+    id = db.Column(db.Integer, primary_key=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"), nullable=False, index=True)
+    game_index = db.Column(db.Integer, nullable=False, default=1)
+    # Шаг конвейера: mirror | extraction | gate2 | skeleton | balance |
+    # diagnost_triage | diagnost_findings | lenses | synthesis | redesign
+    step = db.Column(db.String(32), nullable=False, index=True)
+    status = db.Column(db.String(16), nullable=False, default=QUEUED, index=True)
+    # Короткая подпись для экрана: «Агент читает игру…». Прогресс здесь именно
+    # текстовый: сколько процентов занял вызов модели, не знает никто, и рисовать
+    # выдуманную полосу было бы враньём.
+    stage = db.Column(db.String(120), nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    # Отмену запрашивает автор, а исполняет поток — между шагами. Прервать сам
+    # вызов модели нельзя: HTTP-запрос уже ушёл, и деньги за него уже потрачены.
+    cancel_requested = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+
+    document = db.relationship("Document", backref="jobs")
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in self.ACTIVE
+
+    @property
+    def duration(self):
+        """Сколько идёт (или шла) задача, в секундах."""
+        if not self.started_at:
+            return None
+        end = self.finished_at or datetime.utcnow()
+        return round((end - self.started_at).total_seconds(), 1)
+
+    def as_dict(self) -> dict:
+        """Ответ на опрос статуса — он же будущий ответ API интеграции."""
+        return {
+            "id": self.id,
+            "document_id": self.document_id,
+            "game_index": self.game_index,
+            "step": self.step,
+            "status": self.status,
+            "stage": self.stage,
+            "error": self.error,
+            "cancel_requested": bool(self.cancel_requested),
+            "duration_sec": self.duration,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+        }
+
+
 class MirrorSession(db.Model):
     """Диалог агента «Понимание игры» для одной игры документа.
 

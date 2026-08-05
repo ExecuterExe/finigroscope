@@ -14,6 +14,8 @@
         <p class="mirror-intro">Единственный шаг, который читает игру как игру, а не как набор чисел: замысел, глубину решений, вовлечение, образовательную ценность. Всё, что симуляция измерить не может — убедительность питча, напряжение за столом, вредность финансового урока, — доходит до итогового отчёта только отсюда. Оценивается рабочее ядро из {{ core_size }} линз в {{ core | length }} категориях.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {# --- условие вызова: пока есть критичное, оценивать замысел рано --- #}
     {% if not gate.ready %}
     <div class="mirror-badge badge-open">
@@ -47,7 +49,7 @@
     </div>
     {% endif %}
 
-    {% if gate.ready and not result and not lr.error %}
+    {% if gate.ready and not result and not lr.error and job and job.is_active %}
     <div class="mirror-loading">Агент проходит {{ core_size }} линз — это самый длинный разбор в конвейере…</div>
     {% endif %}
 

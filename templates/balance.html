@@ -33,6 +33,8 @@
         <p class="mirror-intro">Агент прогоняет статистику симуляции через шесть проверок с числовыми порогами. Он оценивает <b>технический</b> баланс — тему, дизайн и ощущения за столом здесь не оценивают, для этого есть отдельный шаг.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {% if br.error %}
     <div class="mirror-error"><span>🛑 {{ br.error }}</span></div>
     {% endif %}
@@ -295,7 +297,7 @@
             <summary>Показать статистику прогона (STATS_JSON)</summary>
             <pre class="json-preview raw-body">{{ br.stats_json }}</pre>
         </details>
-    {% elif not br.error %}
+    {% elif not br.error and job and job.is_active %}
         <div class="mirror-loading">Агент разбирает статистику…</div>
     {% endif %}
     {% endif %}

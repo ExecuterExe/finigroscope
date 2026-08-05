@@ -1,0 +1,87 @@
+{# Плашка идущего шага. Подключается на любом экране одной строкой:
+       {% include "_job.html" %}
+   и ждёт в контексте переменную `job` (может быть None).
+
+   Прогресс здесь ТЕКСТОВЫЙ, без полосы с процентами. Сколько процентов занял
+   вызов модели, не знает никто — ни мы, ни провайдер; рисовать ползущую полосу
+   значило бы придумывать число. Вместо этого показываем, что именно идёт,
+   сколько уже длится и сколько это обычно занимает. #}
+{% if job %}
+{% if job.is_active %}
+<div class="job-card" id="job-card" data-job-url="{{ url_for('job_status', job_id=job.id) }}">
+    <div class="job-head">
+        <span class="job-spinner" aria-hidden="true"></span>
+        <span class="job-title">{{ job.stage or job.step }}</span>
+        <span class="job-status" id="job-elapsed">{{ '%.0f' | format(job.duration or 0) }} с</span>
+    </div>
+    <div class="job-note">
+        {{ job_hint(job.step) }}. Страница обновится сама — можно закрыть вкладку
+        и вернуться позже, шаг продолжит считаться на сервере.
+    </div>
+    {% if job.cancel_requested %}
+    <div class="job-note job-note-warn">
+        Остановка запрошена — прервёмся после текущего обращения к модели.
+    </div>
+    {% else %}
+    <form method="post" action="{{ url_for('job_cancel', job_id=job.id) }}" class="job-cancel">
+        <button class="btn btn-ghost btn-sm" type="submit">Остановить</button>
+        <span class="cta-hint">прервать сам запрос к модели нельзя — он уже отправлен и будет оплачен</span>
+    </form>
+    {% endif %}
+</div>
+
+<script>
+// Опрос статуса. Как только шаг завершился — перезагружаем страницу, чтобы
+// показать результат тем же кодом, что и при обычном заходе.
+(function () {
+    var card = document.getElementById("job-card");
+    if (!card) return;
+    var url = card.dataset.jobUrl;
+    var started = Date.now();
+    var elapsed = document.getElementById("job-elapsed");
+    var base = parseInt(elapsed.textContent, 10) || 0;
+
+    setInterval(function () {
+        elapsed.textContent = (base + Math.round((Date.now() - started) / 1000)) + " с";
+    }, 1000);
+
+    (function poll() {
+        fetch(url, { headers: { "Accept": "application/json" } })
+            .then(function (r) { return r.json(); })
+            .then(function (job) {
+                if (job.status === "queued" || job.status === "running") {
+                    setTimeout(poll, 2000);
+                } else {
+                    window.location.reload();
+                }
+            })
+            .catch(function () { setTimeout(poll, 5000); });
+    })();
+})();
+</script>
+
+{% elif job.status == 'failed' and job.error %}
+<div class="job-card job-card-failed">
+    <div class="job-head">
+        <span class="job-title">🛑 Шаг не выполнился: {{ job.stage or job.step }}</span>
+    </div>
+    <div class="job-note">{{ job.error.split('\n')[0] }}</div>
+    {% if job.error.count('\n') > 1 %}
+    <details class="raw-toggle">
+        <summary>Подробности</summary>
+        <pre class="json-preview raw-body">{{ job.error }}</pre>
+    </details>
+    {% endif %}
+    {% include "_job_retry.html" %}
+</div>
+
+{% elif job.status == 'cancelled' %}
+<div class="job-card job-card-cancelled">
+    <div class="job-head">
+        <span class="job-title">⏹️ Шаг остановлен: {{ job.stage or job.step }}</span>
+    </div>
+    <div class="job-note">{{ job.error or 'Отменено автором.' }}</div>
+    {% include "_job_retry.html" %}
+</div>
+{% endif %}
+{% endif %}

@@ -28,6 +28,9 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+import config
+import jobs
+import migrate
 from analysis import stage1
 from analysis.reference import DOC_TYPES
 from models import (
@@ -36,6 +39,7 @@ from models import (
     Document,
     GameSkeleton,
     GameSpec,
+    Job,
     LensReport,
     MirrorSession,
     RedesignAttempt,
@@ -60,18 +64,19 @@ from simulation import runner as sim_runner
 # см. .env.example. Файл .env в git не попадает (см. .gitignore).
 load_dotenv()
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+# Пути и режим запуска — из окружения (см. config.py). Раньше путь к базе был
+# константой, и тестовый прогон работал с тем же файлом, что живой сервер.
+UPLOAD_DIR = config.upload_dir()
 
 # --- создание приложения ----------------------------------------------------
 app = Flask(__name__)
 app.config.update(
-    SECRET_KEY="finigroskop-dev-secret-change-me",  # TODO: вынести в конфиг/ENV
-    SQLALCHEMY_DATABASE_URI="sqlite:///finigroskop.db",
+    SECRET_KEY=config.secret_key(),
+    SQLALCHEMY_DATABASE_URI=config.database_uri(),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     MAX_CONTENT_LENGTH=16 * 1024 * 1024,  # 16 МБ на файл
     UPLOAD_DIR=UPLOAD_DIR,
 )
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Вход временно ОТКЛЮЧЁН для быстрого тестирования: сервис работает без логина.
 # При этом хранилище ЭФЕМЕРНОЕ и ИЗОЛИРОВАННОЕ ПО СЕССИИ браузера:
@@ -84,9 +89,15 @@ db.init_app(app)
 
 
 def _reset_storage():
-    """Полная очистка хранилища: пересоздать таблицы и удалить загруженные файлы."""
+    """Полная очистка хранилища: пересоздать таблицы и удалить загруженные файлы.
+
+    Схему после сброса поднимают МИГРАЦИИ, а не create_all: иначе свежая база
+    осталась бы без отметки о ревизии, и следующая миграция попыталась бы
+    накатиться на неё второй раз.
+    """
     db.drop_all()
-    db.create_all()
+    db.session.commit()
+    migrate.upgrade(db)
     for name in os.listdir(UPLOAD_DIR):
         try:
             os.remove(os.path.join(UPLOAD_DIR, name))
@@ -95,16 +106,19 @@ def _reset_storage():
 
 
 with app.app_context():
-    if AUTH_DISABLED:
-        # Только на ДЕЙСТВИТЕЛЬНО новый запуск процесса `python app.py`, а не на
-        # каждую авто-перезагрузку Flask (debug=True перезапускает воркер при
-        # любом сохранении .py-файла — без этой проверки правки кода на лету
-        # стирали бы всю сессию пользователя, и старые открытые вкладки/ссылки
-        # начинали бы отдавать 404 посреди работы).
-        if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-            _reset_storage()
-    else:
-        db.create_all()
+    # Схему приводят в порядок миграции (см. migrate.py): create_all умел только
+    # создавать недостающие таблицы и молча пропускал новые колонки в уже
+    # существующих — с постоянным хранилищем это ломало бы сервис при каждом
+    # добавлении поля.
+    migrate.upgrade(db)
+    # Очистка хранилища — ТОЛЬКО по явному разрешению и НИКОГДА как побочный
+    # эффект импорта. Раньше она стояла прямо здесь, и любой запуск тестов
+    # (а они импортируют app) стирал базу работающего рядом дев-сервера.
+    if AUTH_DISABLED and config.reset_allowed():
+        _reset_storage()
+
+# Пул фоновых задач + подчистка задач, застигнутых прошлым перезапуском.
+jobs.init_app(app)
 
 
 # --- утилиты авторизации ----------------------------------------------------
@@ -190,6 +204,13 @@ def _ensure_blank_line_around_tables(text: str) -> str:
     return "\n".join(out)
 
 
+@app.context_processor
+def inject_job_helpers():
+    """Подсказки о шагах — чтобы плашка прогресса не хардкодила их в разметке."""
+    return {"job_hint": jobs.step_hint, "job_title": jobs.step_title,
+            "job_retry": jobs.retry_endpoint}
+
+
 @app.template_filter("markdown")
 def render_markdown(text):
     """Рендерит markdown из ответа ИИ-агента в HTML (таблицы, списки, **жирный**).
@@ -208,6 +229,54 @@ def render_markdown(text):
     escaped = _html.escape(text)
     escaped = _ensure_blank_line_around_tables(escaped)
     return _markdown.markdown(escaped, extensions=["extra", "nl2br", "sane_lists"])
+
+
+# --- фоновые задачи: статус, отмена -----------------------------------------
+# Эти три маршрута — заодно и основа будущей интеграции по API: любой шаг
+# конвейера ставится в очередь и опрашивается одинаково, независимо от того,
+# смотрит на него человек в браузере или другой сервис.
+@app.route("/jobs/<int:job_id>.json")
+@login_required
+def job_status(job_id):
+    """Состояние одной задачи. Экран опрашивает его, пока шаг идёт."""
+    job = db.session.get(Job, job_id)
+    if job is None:
+        abort(404)
+    _owned_document(job.document_id)
+    return jsonify(job.as_dict())
+
+
+@app.route("/documents/<int:doc_id>/jobs/<int:game_index>.json")
+@login_required
+def jobs_of_game(doc_id, game_index):
+    """Все задачи игры — карта состояния конвейера одним запросом."""
+    _owned_document(doc_id)
+    rows = (Job.query.filter_by(document_id=doc_id, game_index=game_index)
+            .order_by(Job.id.asc()).all())
+    return jsonify({"document_id": doc_id, "game_index": game_index,
+                    "jobs": [j.as_dict() for j in rows]})
+
+
+@app.route("/jobs/<int:job_id>/cancel", methods=["POST"])
+@login_required
+def job_cancel(job_id):
+    """Просьба остановить шаг.
+
+    Останавливает МЕЖДУ обращениями к модели, а не внутри: запрос уже ушёл, и
+    ответ будет оплачен независимо от нашего желания. Об этом честно сказано на
+    экране, чтобы отмена не выглядела мгновенной.
+    """
+    job = db.session.get(Job, job_id)
+    if job is None:
+        abort(404)
+    document = _owned_document(job.document_id)
+    if jobs.request_cancel(job_id):
+        flash("Остановим после текущего обращения к модели — прервать сам запрос "
+              "нельзя, он уже отправлен.", "warning")
+    else:
+        flash("Задача уже завершилась — останавливать нечего.", "warning")
+    return redirect(request.referrer
+                    or url_for("games", doc_id=document.id))
 
 
 # --- публичные маршруты -----------------------------------------------------
@@ -376,15 +445,29 @@ def mirror(doc_id, game_index):
         db.session.add(ms)
         db.session.commit()
 
-    if ms.phase == MirrorSession.PHASE_PENDING:
-        game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
+    if (ms.phase == MirrorSession.PHASE_PENDING
+            and jobs.may_autostart(doc_id, game_index, "mirror", ms.created_at)):
+        jobs.submit(doc_id, game_index, "mirror",
+                    _mirror_pass1_job(document, game_index))
+
+    return render_template("mirror.html", document=document, game=game,
+                           game_index=game_index, ms=ms,
+                           job=jobs.latest(doc_id, game_index, "mirror"))
+
+
+def _mirror_pass1_job(document, game_index):
+    """Тело фоновой задачи прохода 1. Внутри — тот же код, что был синхронным."""
+    doc_id = document.id
+    stored_path, doc_type = document.stored_path, document.doc_type
+
+    def run(job_id=None):
+        ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
+        game_text = stage1.game_text_for_agent(stored_path, doc_type, game_index)
         outcome = mirror_agent.run_pass(game_text, round_no=ms.round,
                                         max_rounds=MirrorSession.MAX_ROUNDS)
         _apply_mirror_outcome(ms, outcome, phase_on_success=MirrorSession.PHASE_MIRROR)
-        db.session.commit()
 
-    return render_template("mirror.html", document=document, game=game,
-                           game_index=game_index, ms=ms)
+    return run
 
 
 @app.route("/documents/<int:doc_id>/mirror/<int:game_index>/reply", methods=["POST"])
@@ -409,30 +492,39 @@ def mirror_reply(doc_id, game_index):
         flash("Введите ответ (или напишите «всё ясно, продолжаем»).", "error")
         return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
 
-    was_final = ms.is_final_round
     ms.author_answer = answer
-    game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
-    outcome = mirror_agent.run_pass(game_text, prior_json=ms.last_json_dict(), author_answer=answer,
-                                    round_no=ms.round, max_rounds=MirrorSession.MAX_ROUNDS)
-
-    if not outcome.get("available"):
-        ms.error = outcome.get("error") or "ИИ-агент недоступен."
-        db.session.commit()
-        return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
-
-    data = outcome.get("json") or {}
-    wants_more = (not data.get("ready_to_proceed")) and bool(data.get("questions"))
-    # Ещё раунд — только если агент реально просит и лимит не исчерпан.
-    if wants_more and not was_final:
-        ms.round += 1
-        _apply_mirror_outcome(ms, outcome, phase_on_success=MirrorSession.PHASE_MIRROR)
-    else:
-        _apply_mirror_outcome(ms, outcome, phase_on_success=MirrorSession.PHASE_CONFIRMED)
-        if was_final and wants_more:
-            # Модель проигнорировала запрет на новые вопросы — закрываем сами.
-            ms.ready_to_proceed = True
     db.session.commit()
 
+    stored_path, doc_type = document.stored_path, document.doc_type
+
+    def run(job_id=None):
+        session = MirrorSession.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        was_final = session.is_final_round
+        game_text = stage1.game_text_for_agent(stored_path, doc_type, game_index)
+        outcome = mirror_agent.run_pass(
+            game_text, prior_json=session.last_json_dict(), author_answer=answer,
+            round_no=session.round, max_rounds=MirrorSession.MAX_ROUNDS)
+
+        if not outcome.get("available"):
+            session.error = outcome.get("error") or "ИИ-агент недоступен."
+            return
+
+        data = outcome.get("json") or {}
+        wants_more = (not data.get("ready_to_proceed")) and bool(data.get("questions"))
+        # Ещё раунд — только если агент реально просит и лимит не исчерпан.
+        if wants_more and not was_final:
+            session.round += 1
+            _apply_mirror_outcome(session, outcome,
+                                  phase_on_success=MirrorSession.PHASE_MIRROR)
+        else:
+            _apply_mirror_outcome(session, outcome,
+                                  phase_on_success=MirrorSession.PHASE_CONFIRMED)
+            if was_final and wants_more:
+                # Модель проигнорировала запрет на новые вопросы — закрываем сами.
+                session.ready_to_proceed = True
+
+    jobs.submit(doc_id, game_index, "mirror", run)
     return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
 
 
@@ -449,27 +541,39 @@ def mirror_retry(doc_id, game_index):
 
     Ответ автора сохраняется и подаётся снова — переспрашивать его повторно
     было бы наказанием за сбой на нашей стороне.
+
+    Работает и на самом первом проходе (фаза `pending`). Раньше он здесь
+    отказывал: перезапуском служило простое открытие экрана. Теперь экран
+    ничего не запускает сам (см. jobs.may_autostart), и без этой ветки сбой
+    первого прохода стал бы тупиком без единого выхода.
     """
     document = _owned_document(doc_id)
     ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
-    if ms is None or ms.phase == MirrorSession.PHASE_PENDING:
+    if ms is None:
         flash("Сверка ещё не начиналась.", "error")
         return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
 
-    game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
-    outcome = mirror_agent.run_pass(
-        game_text, prior_json=ms.last_json_dict(), author_answer=ms.author_answer,
-        round_no=ms.round, max_rounds=MirrorSession.MAX_ROUNDS)
+    stored_path, doc_type = document.stored_path, document.doc_type
 
-    data = outcome.get("json") or {}
-    # Фазу выбираем по тому же правилу, что и в обычном ходе: есть вопросы и
-    # агент не закончил — ждём автора, иначе сверка закрыта.
-    wants_more = (not data.get("ready_to_proceed")) and bool(data.get("questions"))
-    _apply_mirror_outcome(
-        ms, outcome,
-        phase_on_success=MirrorSession.PHASE_MIRROR if wants_more
-        else MirrorSession.PHASE_CONFIRMED)
-    db.session.commit()
+    def run(job_id=None):
+        session = MirrorSession.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        game_text = stage1.game_text_for_agent(stored_path, doc_type, game_index)
+        outcome = mirror_agent.run_pass(
+            game_text, prior_json=session.last_json_dict(),
+            author_answer=session.author_answer,
+            round_no=session.round, max_rounds=MirrorSession.MAX_ROUNDS)
+
+        data = outcome.get("json") or {}
+        # Фазу выбираем по тому же правилу, что и в обычном ходе: есть вопросы и
+        # агент не закончил — ждём автора, иначе сверка закрыта.
+        wants_more = (not data.get("ready_to_proceed")) and bool(data.get("questions"))
+        _apply_mirror_outcome(
+            session, outcome,
+            phase_on_success=MirrorSession.PHASE_MIRROR if wants_more
+            else MirrorSession.PHASE_CONFIRMED)
+
+    jobs.submit(doc_id, game_index, "mirror", run)
     return redirect(url_for("mirror", doc_id=doc_id, game_index=game_index))
 
 
@@ -490,16 +594,51 @@ def spec(doc_id, game_index):
         db.session.add(gs)
         db.session.commit()
 
-    if gs.spec_json is None:
-        _run_extraction(document, ms, gs, game_index)
-        db.session.commit()
+    if (gs.spec_json is None
+            and jobs.may_autostart(doc_id, game_index, "extraction", gs.created_at)):
+        jobs.submit(doc_id, game_index, "extraction",
+                    _extraction_job(document, game_index))
 
     # Критичные пробелы — вход второго гейта: их поднимает не автор, а машина,
     # и закрыть их может только агент понимания (единственный, кто спрашивает).
     gate2_gaps = extractor_agent.critical_gaps(gs.spec_dict())
     return render_template("spec.html", document=document, game_index=game_index,
                            gs=gs, ms=ms, describe=spec_describe,
-                           gate2_gaps=gate2_gaps)
+                           gate2_gaps=gate2_gaps,
+                           job=jobs.latest(doc_id, game_index, "extraction"))
+
+
+@app.route("/documents/<int:doc_id>/spec/<int:game_index>/retry", methods=["POST"])
+@login_required
+def spec_retry(doc_id, game_index):
+    """Прогнать извлечение заново — после сбоя или смены модели.
+
+    Кнопка обязательна именно потому, что экран больше не запускает шаг сам
+    (см. jobs.may_autostart): без неё сбой извлечения стал бы тупиком, из
+    которого автор не выбрался бы вообще.
+    """
+    document = _owned_document(doc_id)
+    gs = GameSpec.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if gs is None:
+        gs = GameSpec(document_id=doc_id, game_index=game_index)
+        db.session.add(gs)
+    gs.spec_json = gs.issues_json = None
+    gs.error = None
+    db.session.commit()
+    jobs.submit(doc_id, game_index, "extraction", _extraction_job(document, game_index))
+    return redirect(url_for("spec", doc_id=doc_id, game_index=game_index))
+
+
+def _extraction_job(document, game_index):
+    """Тело фоновой задачи извлечения."""
+    doc_id = document.id
+
+    def run(job_id=None):
+        ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
+        gs = GameSpec.query.filter_by(document_id=doc_id, game_index=game_index).first()
+        _run_extraction(document, ms, gs, game_index)
+
+    return run
 
 
 def _run_extraction(document, ms, gs, game_index):
@@ -550,8 +689,29 @@ def gate2(doc_id, game_index):
 
     # Обращение А: агент формулирует точечные вопросы (или честно говорит, что
     # спрашивать нечего — всё уже закрыто на проходах 1-2).
-    if ms.gate2_status == MirrorSession.GATE2_NONE:
-        game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
+    if (ms.gate2_status == MirrorSession.GATE2_NONE
+            and jobs.may_autostart(doc_id, game_index, "gate2", ms.created_at)):
+        jobs.submit(doc_id, game_index, "gate2", _gate2_ask_job(document, game_index))
+        ms = MirrorSession.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+
+    return render_template("gate2.html", document=document, game_index=game_index,
+                           ms=ms, gs=gs, gaps=gaps,
+                           job=jobs.latest(doc_id, game_index, "gate2"))
+
+
+def _gate2_ask_job(document, game_index):
+    """Обращение А второго гейта: агент формулирует точечные вопросы."""
+    doc_id = document.id
+
+    def run(job_id=None):
+        ms = MirrorSession.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        gs = GameSpec.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        gaps = extractor_agent.critical_gaps(gs.spec_dict())
+        game_text = stage1.game_text_for_agent(
+            document.stored_path, document.doc_type, game_index)
         outcome = mirror_agent.run_gate2(
             game_text, ms.last_json_dict(), gaps,
             ambiguities=extractor_agent.ambiguities(gs.spec_dict()))
@@ -566,10 +726,28 @@ def gate2(doc_id, game_index):
             # Вопросов нет — гейт закрываем сразу, автора не тревожим.
             ms.gate2_status = (MirrorSession.GATE2_ASKED if data.get("questions")
                                else MirrorSession.GATE2_DONE)
-        db.session.commit()
 
-    return render_template("gate2.html", document=document, game_index=game_index,
-                           ms=ms, gs=gs, gaps=gaps)
+    return run
+
+
+@app.route("/documents/<int:doc_id>/gate2/<int:game_index>/retry", methods=["POST"])
+@login_required
+def gate2_retry(doc_id, game_index):
+    """Прогнать обращение А гейта заново после сбоя.
+
+    Бюджет гейта при этом НЕ тратится: `gate2_runs` растёт только когда агент
+    действительно ответил. Сбой вызова — не использованная попытка, и списывать
+    её значило бы наказывать автора за недоступность модели.
+    """
+    document = _owned_document(doc_id)
+    ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    if ms is None or ms.gate2_status != MirrorSession.GATE2_NONE:
+        flash("Гейт уже открыт — прогонять заново нечего.", "warning")
+        return redirect(url_for("gate2", doc_id=doc_id, game_index=game_index))
+    ms.gate2_error = None
+    db.session.commit()
+    jobs.submit(doc_id, game_index, "gate2", _gate2_ask_job(document, game_index))
+    return redirect(url_for("gate2", doc_id=doc_id, game_index=game_index))
 
 
 @app.route("/documents/<int:doc_id>/gate2/<int:game_index>/reply", methods=["POST"])
@@ -593,39 +771,50 @@ def gate2_reply(doc_id, game_index):
         flash("Введите ответ (или напишите, что уточнить не получится).", "error")
         return redirect(url_for("gate2", doc_id=doc_id, game_index=game_index))
 
-    gaps = extractor_agent.critical_gaps(gs.spec_dict())
-    asked = (ms.gate2_json_dict() or {}).get("questions") or []
-    game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
-    outcome = mirror_agent.run_gate2(
-        game_text, ms.last_json_dict(), gaps,
-        ambiguities=extractor_agent.ambiguities(gs.spec_dict()),
-        author_answer=answer, asked_questions=asked)
+    def run(job_id=None):
+        ms_ = MirrorSession.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        gs_ = GameSpec.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        gaps = extractor_agent.critical_gaps(gs_.spec_dict())
+        asked = (ms_.gate2_json_dict() or {}).get("questions") or []
+        game_text = stage1.game_text_for_agent(
+            document.stored_path, document.doc_type, game_index)
+        outcome = mirror_agent.run_gate2(
+            game_text, ms_.last_json_dict(), gaps,
+            ambiguities=extractor_agent.ambiguities(gs_.spec_dict()),
+            author_answer=answer, asked_questions=asked)
 
-    if not outcome.get("available"):
-        ms.gate2_error = outcome.get("error") or "ИИ-агент недоступен."
+        if not outcome.get("available"):
+            ms_.gate2_error = outcome.get("error") or "ИИ-агент недоступен."
+            return
+
+        data = outcome.get("json") or {}
+        ms_.gate2_error = None
+        ms_.gate2_answer = answer
+        ms_.gate2_text = outcome.get("text")
+        ms_.gate2_json = json.dumps(data, ensure_ascii=False)
+        ms_.gate2_status = MirrorSession.GATE2_DONE
+        if data.get("simulation_blocking") is not None:
+            ms_.simulation_blocking = bool(data.get("simulation_blocking"))
+
+        # Ответы гейта — полноправные уточнения автора: дописываем их в
+        # подтверждённый материал прохода 2 и пересобираем структуру.
+        confirmed = ms_.last_json_dict() or {}
+        ms_.last_json = json.dumps(
+            extractor_agent.merge_gate2_answers(confirmed, data, answer),
+            ensure_ascii=False)
         db.session.commit()
-        return redirect(url_for("gate2", doc_id=doc_id, game_index=game_index))
 
-    data = outcome.get("json") or {}
-    ms.gate2_error = None
-    ms.gate2_answer = answer
-    ms.gate2_text = outcome.get("text")
-    ms.gate2_json = json.dumps(data, ensure_ascii=False)
-    ms.gate2_status = MirrorSession.GATE2_DONE
-    if data.get("simulation_blocking") is not None:
-        ms.simulation_blocking = bool(data.get("simulation_blocking"))
+        # Между двумя обращениями к модели — естественная точка отмены.
+        if job_id is not None:
+            jobs.check_cancelled(job_id)
 
-    # Ответы гейта — полноправные уточнения автора: дописываем их в подтверждённый
-    # материал прохода 2 и пересобираем структуру по обновлённому тексту.
-    confirmed = ms.last_json_dict() or {}
-    ms.last_json = json.dumps(
-        extractor_agent.merge_gate2_answers(confirmed, data, answer), ensure_ascii=False)
+        gs_.spec_json = None
+        _run_extraction(document, ms_, gs_, game_index)
 
-    gs.spec_json = None
-    _run_extraction(document, ms, gs, game_index)
-    db.session.commit()
-
-    flash("Ответы второго гейта учтены, структура пересобрана.", "success")
+    jobs.submit(doc_id, game_index, "gate2", run)
+    flash("Ответы приняты — пересобираем структуру.", "success")
     return redirect(url_for("spec", doc_id=doc_id, game_index=game_index))
 
 
@@ -686,31 +875,42 @@ def spec_revise(doc_id, game_index):
         flash("Опишите, что именно не так в структуре.", "error")
         return redirect(url_for("spec", doc_id=doc_id, game_index=game_index))
 
-    game_text = stage1.game_text_for_agent(document.stored_path, document.doc_type, game_index)
-    outcome = mirror_agent.run_pass(
-        game_text, prior_json=ms.last_json_dict(), author_answer=note,
-        round_no=MirrorSession.MAX_ROUNDS, max_rounds=MirrorSession.MAX_ROUNDS,
-        revision_note=note)
+    def run(job_id=None):
+        ms_ = MirrorSession.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        gs_ = GameSpec.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        game_text = stage1.game_text_for_agent(
+            document.stored_path, document.doc_type, game_index)
+        outcome = mirror_agent.run_pass(
+            game_text, prior_json=ms_.last_json_dict(), author_answer=note,
+            round_no=MirrorSession.MAX_ROUNDS, max_rounds=MirrorSession.MAX_ROUNDS,
+            revision_note=note)
 
-    if not outcome.get("available"):
-        flash(outcome.get("error") or "Агент недоступен, попробуйте позже.", "error")
-        return redirect(url_for("spec", doc_id=doc_id, game_index=game_index))
+        if not outcome.get("available"):
+            # Правка засчитывается только при удачном прогоне — иначе автор
+            # потерял бы единственную попытку из-за сбоя сети, а не из-за
+            # своего решения. Поэтому счётчик двигаем ниже, а не здесь.
+            ms_.error = outcome.get("error") or "Агент недоступен, попробуйте позже."
+            return
 
-    # Правка засчитывается только при удачном прогоне — иначе автор потерял бы
-    # единственную попытку из-за сбоя сети, а не из-за своего решения.
-    gs.revisions += 1
-    gs.status = GameSpec.STATUS_REVISED
-    gs.revision_note = note
+        gs_.revisions += 1
+        gs_.status = GameSpec.STATUS_REVISED
+        gs_.revision_note = note
 
-    ms.author_answer = note
-    _apply_mirror_outcome(ms, outcome, phase_on_success=MirrorSession.PHASE_CONFIRMED)
-    ms.ready_to_proceed = True  # режим правки всегда завершает сверку
+        ms_.author_answer = note
+        _apply_mirror_outcome(ms_, outcome, phase_on_success=MirrorSession.PHASE_CONFIRMED)
+        ms_.ready_to_proceed = True  # режим правки всегда завершает сверку
+        db.session.commit()
 
-    gs.spec_json = None  # заставляем пересобрать структуру заново
-    _run_extraction(document, ms, gs, game_index)
-    db.session.commit()
+        if job_id is not None:
+            jobs.check_cancelled(job_id)
 
-    flash("Замечание учтено, структура пересобрана.", "success")
+        gs_.spec_json = None  # заставляем пересобрать структуру заново
+        _run_extraction(document, ms_, gs_, game_index)
+
+    jobs.submit(doc_id, game_index, "extraction", run)
+    flash("Замечание принято — пересобираем структуру.", "success")
     return redirect(url_for("spec", doc_id=doc_id, game_index=game_index))
 
 
@@ -843,11 +1043,25 @@ def skeleton(doc_id, game_index):
         db.session.commit()
 
     # Прогоняем агента только если ещё не было результата (или прошлый — сбой).
-    if not sk.is_ready:
-        _run_simulation(gs, sk, document, game_index)
-        db.session.commit()
+    if (not sk.is_ready
+            and jobs.may_autostart(doc_id, game_index, "skeleton", sk.created_at)):
+        jobs.submit(doc_id, game_index, "skeleton",
+                    _skeleton_job(document, game_index))
 
-    return render_template("skeleton.html", document=document, game_index=game_index, sk=sk)
+    return render_template("skeleton.html", document=document, game_index=game_index,
+                           sk=sk, job=jobs.latest(doc_id, game_index, "skeleton"))
+
+
+def _skeleton_job(document, game_index):
+    """Тело фоновой задачи симуляциониста — самый долгий шаг: агент пишет файл кода."""
+    doc_id = document.id
+
+    def run(job_id=None):
+        gs = GameSpec.query.filter_by(document_id=doc_id, game_index=game_index).first()
+        sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=game_index).first()
+        _run_simulation(gs, sk, document, game_index)
+
+    return run
 
 
 def _run_simulation(gs, sk, document=None, game_index=1):
@@ -900,8 +1114,8 @@ def skeleton_retry(doc_id, game_index):
     if sk is None:
         sk = GameSkeleton(document_id=doc_id, game_index=game_index)
         db.session.add(sk)
-    _run_simulation(gs, sk, document, game_index)
-    db.session.commit()
+        db.session.commit()
+    jobs.submit(doc_id, game_index, "skeleton", _skeleton_job(document, game_index))
     return redirect(url_for("skeleton", doc_id=doc_id, game_index=game_index))
 
 
@@ -917,9 +1131,11 @@ def balance(doc_id, game_index):
     document = _owned_document(doc_id)
     sk, br = _balance_context(doc_id, game_index)
 
-    if br.has_stats and not br.report_json and not br.error:
-        _run_stats_evaluation(doc_id, game_index, br)
-        db.session.commit()
+    if (br.has_stats and not br.report_json and not br.error
+            and jobs.may_autostart(doc_id, game_index, "balance", br.created_at)):
+        jobs.submit(doc_id, game_index, "balance",
+                    lambda job_id=None: _run_stats_evaluation(
+                        doc_id, game_index, _balance_report(doc_id, game_index)))
 
     gs = GameSpec.query.filter_by(document_id=doc_id, game_index=game_index).first()
     root = gs.spec_dict() if gs else {}
@@ -931,7 +1147,14 @@ def balance(doc_id, game_index):
         # не место, иначе автор видит предложение вместо идентификатора.
         soft=stats_agent.soft_actions((root or {}).get("diagnostic_meta"),
                                       _subjective_actions(root, sk)),
+        job=jobs.latest(doc_id, game_index, "balance"),
     )
+
+
+def _balance_report(doc_id, game_index):
+    """Запись отчёта о балансе — берётся заново внутри задачи, своей сессией."""
+    return BalanceReport.query.filter_by(
+        document_id=doc_id, game_index=game_index).first()
 
 
 @app.route("/documents/<int:doc_id>/balance/<int:game_index>/stats", methods=["POST"])
@@ -979,6 +1202,14 @@ def balance_stats(doc_id, game_index):
     br.issues_json = None
     db.session.commit()
 
+    # Оценку заказываем ЗДЕСЬ, а не на экране. Экран запускает шаг сам только
+    # один раз (jobs.may_autostart) — иначе сбой крутился бы по кругу, тратя
+    # обращения к модели. А новая статистика — явное действие автора, ровно то,
+    # по чему шаг и должен запускаться повторно.
+    jobs.submit(doc_id, game_index, "balance",
+                lambda job_id=None: _run_stats_evaluation(
+                    doc_id, game_index, _balance_report(doc_id, game_index)))
+
     return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
 
 
@@ -991,8 +1222,9 @@ def balance_retry(doc_id, game_index):
     if not br.has_stats:
         flash("Сначала нужна статистика прогона.", "warning")
         return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
-    _run_stats_evaluation(doc_id, game_index, br)
-    db.session.commit()
+    jobs.submit(doc_id, game_index, "balance",
+                lambda job_id=None: _run_stats_evaluation(
+                    doc_id, game_index, _balance_report(doc_id, game_index)))
     return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
 
 
@@ -1023,15 +1255,41 @@ def diagnost(doc_id, game_index):
     document = _owned_document(doc_id)
     br, sk, dr = _diagnost_context(doc_id, game_index)
 
-    if dr.phase == DiagnosisReport.PHASE_NONE and not dr.error:
-        _run_triage(document, game_index, br, sk, dr)
-        db.session.commit()
+    if (dr.phase == DiagnosisReport.PHASE_NONE and not dr.error
+            and jobs.may_autostart(doc_id, game_index, "diagnost_triage", dr.created_at)):
+        jobs.submit(doc_id, game_index, "diagnost_triage",
+                    _triage_job(document, game_index))
 
+    # На экране показываем ту задачу, которая сейчас имеет значение: пока идёт
+    # триаж — его, после него — проход вердиктов.
+    job = (jobs.active(doc_id, game_index, "diagnost_triage")
+           or jobs.active(doc_id, game_index, "diagnost_findings")
+           or jobs.latest(doc_id, game_index, "diagnost_findings")
+           or jobs.latest(doc_id, game_index, "diagnost_triage"))
     return render_template(
         "diagnost.html", document=document, game_index=game_index, dr=dr, br=br, sk=sk,
         registry_size=len(diagnost_agent.registry_ids()),
         route=diagnost_agent.route(dr.findings()) if dr.findings() else None,
+        job=job,
     )
+
+
+def _triage_job(document, game_index):
+    doc_id = document.id
+
+    def run(job_id=None):
+        br, sk, dr = _diagnost_records(doc_id, game_index)
+        _run_triage(document, game_index, br, sk, dr)
+
+    return run
+
+
+def _diagnost_records(doc_id, game_index):
+    """Три записи диагноста, взятые заново — внутри задачи своя сессия базы."""
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    dr = DiagnosisReport.query.filter_by(document_id=doc_id, game_index=game_index).first()
+    return br, sk, dr
 
 
 @app.route("/documents/<int:doc_id>/diagnost/<int:game_index>/execute", methods=["POST"])
@@ -1049,24 +1307,34 @@ def diagnost_execute(doc_id, game_index):
         flash("Сначала нужен триаж.", "warning")
         return redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index))
 
-    extra = None
-    dr.runs_error = None
-    requests = dr.kept_requests()
-    if requests:
-        outcome = sim_runner.run_extra_runs(sk.code, requests)
-        if outcome.get("ok"):
-            extra = outcome.get("runs") or {}
-            if outcome.get("missing_runs"):
-                # id прогона обязан совпасть: заказ -> RUN_PLAN -> результат.
-                # Иначе агент на проходе 2 не сопоставит данные с тестом.
-                dr.runs_error = ("Не вернулись результаты прогонов: "
-                                 + ", ".join(outcome["missing_runs"]))
-        else:
-            dr.runs_error = outcome.get("error") or "Доп. прогоны не выполнились."
+    def run(job_id=None):
+        br_, sk_, dr_ = _diagnost_records(doc_id, game_index)
+        extra = None
+        dr_.runs_error = None
+        requests = dr_.kept_requests()
+        if requests:
+            outcome = sim_runner.run_extra_runs(sk_.code, requests)
+            if outcome.get("ok"):
+                extra = outcome.get("runs") or {}
+                if outcome.get("missing_runs"):
+                    # id прогона обязан совпасть: заказ -> RUN_PLAN -> результат.
+                    # Иначе агент на проходе 2 не сопоставит данные с тестом.
+                    dr_.runs_error = ("Не вернулись результаты прогонов: "
+                                      + ", ".join(outcome["missing_runs"]))
+            else:
+                dr_.runs_error = outcome.get("error") or "Доп. прогоны не выполнились."
 
-    dr.extra_runs_json = json.dumps(extra, ensure_ascii=False) if extra else None
-    _run_findings(document, game_index, br, sk, dr, extra)
-    db.session.commit()
+        dr_.extra_runs_json = json.dumps(extra, ensure_ascii=False) if extra else None
+        db.session.commit()
+
+        # Естественная точка отмены: прогоны отработали, второй (самый долгий)
+        # вызов модели ещё не ушёл. Внутри самого вызова прервать уже нельзя.
+        if job_id is not None:
+            jobs.check_cancelled(job_id)
+
+        _run_findings(document, game_index, br_, sk_, dr_, extra)
+
+    jobs.submit(doc_id, game_index, "diagnost_findings", run)
     return redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index))
 
 
@@ -1081,8 +1349,8 @@ def diagnost_retry(doc_id, game_index):
     dr.triage_issues_json = dr.issues_json = None
     dr.kept_requests_json = dr.dropped_requests_json = None
     dr.error = dr.runs_error = None
-    _run_triage(document, game_index, br, sk, dr)
     db.session.commit()
+    jobs.submit(doc_id, game_index, "diagnost_triage", _triage_job(document, game_index))
     return redirect(url_for("diagnost", doc_id=doc_id, game_index=game_index))
 
 
@@ -1179,13 +1447,13 @@ def lenses(doc_id, game_index):
     dr, lr = _lenses_context(doc_id, game_index)
 
     gate = lens_agent.should_run(dr.findings())
-    if gate["ready"] and lr.result_json is None and not lr.error:
-        _run_lenses(document, game_index, dr, lr)
-        db.session.commit()
+    if (gate["ready"] and lr.result_json is None and not lr.error
+            and jobs.may_autostart(doc_id, game_index, "lenses", lr.created_at)):
+        jobs.submit(doc_id, game_index, "lenses", _lenses_job(document, game_index))
 
     return render_template(
         "lenses.html", document=document, game_index=game_index,
-        lr=lr, dr=dr, gate=gate,
+        lr=lr, dr=dr, gate=gate, job=jobs.latest(doc_id, game_index, "lenses"),
         core=lens_agent.CORE, lens_names=lens_agent.lens_names(),
         core_size=len(lens_agent.CORE_LENSES),
         playtest=lens_agent.needs_playtest(_sim_meta(doc_id, game_index)),
@@ -1200,9 +1468,22 @@ def lenses_retry(doc_id, game_index):
     dr, lr = _lenses_context(doc_id, game_index)
     lr.result_json = lr.issues_json = None
     lr.error = None
-    _run_lenses(document, game_index, dr, lr)
     db.session.commit()
+    jobs.submit(doc_id, game_index, "lenses", _lenses_job(document, game_index))
     return redirect(url_for("lenses", doc_id=doc_id, game_index=game_index))
+
+
+def _lenses_job(document, game_index):
+    doc_id = document.id
+
+    def run(job_id=None):
+        dr = DiagnosisReport.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        lr = LensReport.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        _run_lenses(document, game_index, dr, lr)
+
+    return run
 
 
 @app.route("/documents/<int:doc_id>/lenses/<int:game_index>.json")
@@ -1293,13 +1574,14 @@ def synthesis(doc_id, game_index):
     document = _owned_document(doc_id)
     br, dr, sr = _synthesis_context(doc_id, game_index)
 
-    if sr.result_json is None and not sr.error:
-        _run_synthesis(document, game_index, br, dr, sr)
-        db.session.commit()
+    if (sr.result_json is None and not sr.error
+            and jobs.may_autostart(doc_id, game_index, "synthesis", sr.created_at)):
+        jobs.submit(doc_id, game_index, "synthesis",
+                    _synthesis_job(document, game_index, sr.attempt_number))
 
     return render_template(
         "synthesis.html", document=document, game_index=game_index,
-        sr=sr, br=br, dr=dr,
+        sr=sr, br=br, dr=dr, job=jobs.latest(doc_id, game_index, "synthesis"),
         history=_synthesis_history(doc_id, game_index),
         route=_synthesis_route(doc_id, game_index, sr),
         weights=synth_agent.CATEGORY_WEIGHTS,
@@ -1321,9 +1603,26 @@ def synthesis_retry(doc_id, game_index):
     sr.overall_score = sr.score_confidence = None
     sr.revision_required = False
     sr.error = None
-    _run_synthesis(document, game_index, br, dr, sr)
     db.session.commit()
+    jobs.submit(doc_id, game_index, "synthesis",
+                _synthesis_job(document, game_index, sr.attempt_number))
     return redirect(url_for("synthesis", doc_id=doc_id, game_index=game_index))
+
+
+def _synthesis_job(document, game_index, attempt_number):
+    doc_id = document.id
+
+    def run(job_id=None):
+        br = BalanceReport.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        dr = DiagnosisReport.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        sr = (SynthesisReport.query
+              .filter_by(document_id=doc_id, game_index=game_index,
+                         attempt_number=attempt_number).first())
+        _run_synthesis(document, game_index, br, dr, sr)
+
+    return run
 
 
 @app.route("/documents/<int:doc_id>/synthesis/<int:game_index>.json")
@@ -1586,24 +1885,31 @@ def redesign_propose(doc_id, game_index):
     # готовый отчёт с проходным баллом не повод для полного разбора.
     critique = verdict if (verdict or {}).get("revision_required") else None
 
-    outcome = redesign_agent.run(spec_root, finding, attempt_number=attempt_number,
-                                 previous_changes=previous,
-                                 findings_diagnost=diag_findings,
-                                 synthesis_critique=critique)
-
+    # Запись попытки заводим СРАЗУ, до обращения к модели: номер уже занят, и
+    # повторная постановка не должна выдать тот же самый. Ответ агента допишется
+    # в неё, когда задача отработает.
     att = RedesignAttempt(document_id=doc_id, game_index=game_index,
                           attempt_number=attempt_number,
                           trigger_reason=trigger["reason"],
                           spec_before_json=json.dumps(spec_root, ensure_ascii=False))
-    if outcome.get("available"):
-        att.mode = outcome.get("mode")
-        att.result_json = json.dumps(outcome["result"], ensure_ascii=False)
-        att.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
-    else:
-        att.error = outcome.get("error") or "Авто-редизайнер недоступен."
     db.session.add(att)
     db.session.commit()
+    att_id = att.id
 
+    def run(job_id=None):
+        outcome = redesign_agent.run(spec_root, finding, attempt_number=attempt_number,
+                                     previous_changes=previous,
+                                     findings_diagnost=diag_findings,
+                                     synthesis_critique=critique)
+        row = db.session.get(RedesignAttempt, att_id)
+        if outcome.get("available"):
+            row.mode = outcome.get("mode")
+            row.result_json = json.dumps(outcome["result"], ensure_ascii=False)
+            row.issues_json = json.dumps(outcome.get("issues") or [], ensure_ascii=False)
+        else:
+            row.error = outcome.get("error") or "Авто-редизайнер недоступен."
+
+    jobs.submit(doc_id, game_index, "redesign", run)
     return redirect(url_for("redesign", doc_id=doc_id, game_index=game_index))
 
 
@@ -1676,6 +1982,12 @@ def redesign_decide(doc_id, game_index):
         lr.result_json = lr.issues_json = None
         lr.error = None
     db.session.commit()
+
+    # Пересборку скелета заказываем ЗДЕСЬ. Экран сам шаг больше не запускает
+    # (jobs.may_autostart): иначе сбой крутился бы по кругу за деньги. А
+    # применение правки — явное решение автора, ровно тот случай, когда
+    # симуляциониста надо позвать повторно.
+    jobs.submit(doc_id, game_index, "skeleton", _skeleton_job(document, game_index))
 
     flash("Правка применена. Скелет, статистика, вердикты диагноста и оценка по "
           "линзам сброшены — игру нужно пересимулировать и оценить заново.", "success")
@@ -1814,12 +2126,24 @@ def _owned_document(doc_id):
 
 
 if __name__ == "__main__":
-    # use_reloader=False — намеренно. Автоперезагрузчик Werkzeug следит не
-    # только за файлами проекта, а за файлами ВСЕХ импортированных модулей,
-    # включая сторонние библиотеки в site-packages: любое изменение там (даже
-    # `pip install` чего-то не связанного) перезапускает воркер. Для обычных
-    # маршрутов это неприятно (см. AUTH_DISABLED — сбрасывало сессию), а для
-    # /mirror — ОПАСНО: запрос к ИИ-агенту синхронный и может идти до минуты,
-    # и перезапуск посреди него молча обрывает соединение (наблюдалось на
-    # практике). После правки .py-файлов сервер нужно перезапускать вручную.
-    app.run(debug=True, use_reloader=False)
+    # Очистку хранилища при запуске включаем ЗДЕСЬ, а не при импорте: импорт
+    # делают и тесты, и сид-скрипты, и раньше они молча стирали базу живого
+    # сервера. Явное значение в окружении сильнее этого умолчания.
+    os.environ.setdefault("FINIGROSKOP_RESET", "1")
+
+    # Автоперезагрузчик вернули, но с двумя оговорками — обе выяснены на практике.
+    #
+    # 1) Werkzeug по умолчанию следит за файлами ВСЕХ импортированных модулей,
+    #    включая site-packages: любой `pip install` чего-то постороннего
+    #    перезапускал воркер. `exclude_patterns` убирает из-под наблюдения чужие
+    #    библиотеки — сторожим только свой код.
+    # 2) Раньше перезапуск был ещё и ОПАСЕН: вызов модели шёл синхронно внутри
+    #    запроса, и рестарт посреди него молча обрывал соединение. Теперь вызовы
+    #    ушли в фоновые задачи, а задачи, застигнутые перезапуском, помечаются
+    #    `failed` с внятной причиной (jobs.recover_orphans) — вместо вечного
+    #    «идёт…» автор видит «прервано, запустите заново».
+    #
+    # reloader_type="stat" выбран сознательно: watchdog умеет следить точнее, но
+    # он внешняя зависимость, а сервис намеренно живёт на стандартной библиотеке.
+    app.run(debug=True, reloader_type="stat",
+            exclude_patterns=["*/site-packages/*", "*/lib/*", "*/Lib/*"])

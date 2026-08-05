@@ -28,6 +28,8 @@
         <p class="mirror-intro">Агент исполняет {{ registry_size }} тестов методички — всё, чего не видят шесть проверок оценщика статистик: софтлоки, эксплойт-петли, предопределённость, баланс карт, компоненты, масштабируемость. Работает в два прохода: сначала решает, какие тесты применимы и какие прогоны нужны, потом выносит вердикты.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {% if dr.error %}
     <div class="mirror-error">
         <span>🛑 {{ dr.error }}</span>
@@ -37,7 +39,7 @@
     </div>
     {% endif %}
 
-    {% if dr.phase == 'none' and not dr.error %}
+    {% if dr.phase == 'none' and not dr.error and job and job.is_active %}
     <div class="mirror-loading">Агент разбирает, какие тесты применимы к вашей игре…</div>
     {% endif %}
 

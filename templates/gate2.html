@@ -15,6 +15,8 @@
         <p class="mirror-intro">Когда агент раскладывал вашу игру в структуру, вскрылись пробелы, незаметные на уровне текста. Спросить о них может только агент понимания — остальным шагам конвейера домысливать запрещено. Это <b>короткий добор</b>, а не повторная сверка: по карте понимания вас никто заново вести не будет.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {% if ms.gate2_error %}
     <div class="mirror-error">
         <span>🛑 {{ ms.gate2_error }}</span>
@@ -119,7 +121,7 @@
             <a class="btn btn-primary" href="{{ url_for('spec', doc_id=document.id, game_index=game_index) }}">К обновлённой структуре игры →</a>
             <span class="cta-hint">структура пересобрана с учётом ваших ответов</span>
         </div>
-    {% elif not ms.gate2_error %}
+    {% elif not ms.gate2_error and job and job.is_active %}
         <div class="mirror-loading">Агент отбирает, что ещё стоит спросить…</div>
     {% endif %}
 

@@ -22,6 +22,8 @@
         <p class="mirror-intro">Последний шаг. Синтезатор ничего не оценивает заново — он сводит оценки числового анализа и диагноста в один балл, честно считает, какая доля проверки не выполнена, и пишет отчёт автору. Балл собирается по формуле, которую можно пересчитать вручную по таблице ниже.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {% if sr.error %}
     <div class="mirror-error">
         <span>🛑 {{ sr.error }}</span>
@@ -31,7 +33,7 @@
     </div>
     {% endif %}
 
-    {% if not result and not sr.error %}
+    {% if not result and not sr.error and job and job.is_active %}
     <div class="mirror-loading">Сводим оценки и считаем итоговый балл…</div>
     {% endif %}
 

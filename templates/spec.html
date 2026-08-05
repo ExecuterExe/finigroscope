@@ -41,6 +41,8 @@
         <p class="mirror-intro">Агент-извлеченец разложил согласованный текст в <code>game_spec</code>. Он ничего не додумывает: чего не было в тексте и уточнениях — осталось пустым и попало в пробелы.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {% if gs.error %}
     <div class="mirror-error">
         <span>🛑 {{ gs.error }}</span>

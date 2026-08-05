@@ -22,6 +22,8 @@
         <p class="mirror-intro">Агент-симуляционист собрал по принятой структуре <code>game_skeleton.py</code> — технический костяк, который прогоняет партию тысячи раз. Здесь показан <b>только сам скелет</b>: статистик, винрейтов и оценок тут нет — они появятся на следующем шаге, когда код прогонят.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {% if sk.error %}
     <div class="mirror-error">
         <span>🛑 {{ sk.error }}</span>
@@ -30,7 +32,7 @@
         </form>
     </div>
 
-    {% elif sk.simulatable is none %}
+    {% elif sk.simulatable is none and job and job.is_active %}
     <div class="mirror-loading">Симуляционист пишет скелет…</div>
 
     {% elif sk.simulatable %}

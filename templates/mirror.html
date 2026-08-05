@@ -22,6 +22,8 @@
         <p class="mirror-intro">Агент читает вашу игру и сверяется с вами, что понял её верно, — до того как её начнут симулировать и оценивать. Баллов и оценок здесь нет: только понимание и уточнения.</p>
     </div>
 
+    {% include "_job.html" %}
+
     {# --- шаги процесса --- #}
     {% set s1 = 'done' if ms.phase != 'pending' else 'current' %}
     {% set s2 = 'done' if ms.phase == 'confirmed' else ('current' if ms.phase == 'mirror' else 'todo') %}
@@ -52,13 +54,18 @@
     {% if ms.error %}
     <div class="mirror-error">
         <span>🛑 {{ ms.error }}</span>
-        {% if ms.phase == 'pending' %}
-        <a class="btn btn-ghost btn-sm" href="{{ url_for('mirror', doc_id=document.id, game_index=game_index) }}">Попробовать снова</a>
-        {% endif %}
+        {# Раньше здесь была ссылка на сам экран: открытие страницы и было
+           перезапуском. Теперь экран шаг не запускает (иначе сбой крутился бы
+           по кругу, тратя обращения к модели), поэтому нужна настоящая кнопка. #}
+        <form method="post" action="{{ url_for('mirror_retry', doc_id=document.id, game_index=game_index) }}">
+            <button class="btn btn-ghost btn-sm" type="submit">↻ Попробовать снова</button>
+        </form>
     </div>
     {% endif %}
 
-    {% if ms.phase == 'pending' and not ms.error %}
+    {# «Идёт» показываем, только пока задача ДЕЙСТВИТЕЛЬНО идёт. Иначе экран
+       врал: шаг падал, а страница до бесконечности сообщала «агент читает». #}
+    {% if ms.phase == 'pending' and not ms.error and job and job.is_active %}
     <div class="mirror-loading">Агент читает игру…</div>
     {% endif %}
 

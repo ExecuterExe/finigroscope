@@ -328,9 +328,16 @@ with A.app.app_context():
     checks["самопроверка чиста"] = att.issues() == []
 
 # --- принятие: структура меняется, симуляция обнуляется ----------------------
-# Редирект НЕ следуем намеренно: он ведёт на /skeleton, который тут же соберёт
-# скелет заново по новой структуре (это и есть needs_resimulation). Проверить
-# нужно именно факт сброса, а не состояние после пересборки.
+# Пересборку скелета заказывает САМО принятие правки, а не заход на экран: экран
+# запускает шаг только один раз (jobs.may_autostart), иначе сбой крутился бы по
+# кругу за деньги. Поэтому «сброс» проверяется не по обнулённым полям (к концу
+# запроса там уже новый скелет), а по тому, что старый код заменён и статистика,
+# посчитанная по нему, не пережила правку.
+from models import Job  # noqa: E402
+
+with A.app.app_context():
+    sk_jobs_before = Job.query.filter_by(document_id=doc_id, game_index=1,
+                                         step="skeleton").count()
 resp = cl.post(f"/documents/{doc_id}/redesign/1/decide", data={"action": "accept"})
 checks["принятие ведёт на пересимуляцию"] = "/skeleton/" in resp.headers.get("Location", "")
 with A.app.app_context():
@@ -341,15 +348,20 @@ with A.app.app_context():
     checks["структура обновлена"] = gs.spec_dict()["game_spec"]["core"]["win_condition"]["threshold"] == 16
     checks["попытка принята"] = att.status == RedesignAttempt.STATUS_ACCEPTED
     checks["сохранена версия до правки"] = att.spec_before()["game_spec"]["core"]["win_condition"]["threshold"] == 24
-    checks["скелет сброшен"] = sk.simulatable is None and sk.code is None
+    checks["пересборка заказана самим принятием"] = Job.query.filter_by(
+        document_id=doc_id, game_index=1, step="skeleton").count() == sk_jobs_before + 1
     checks["статистика сброшена"] = br.stats_json is None and br.report_json is None
 
-# теперь пройдём по редиректу — скелет обязан пересобраться по НОВОЙ структуре
-sim_before = calls.get("sim", 0)
+# заход на экран — скелет уже собран по НОВОЙ структуре, и повторно никого не зовёт
+with A.app.app_context():
+    sk_jobs_after = Job.query.filter_by(document_id=doc_id, game_index=1,
+                                        step="skeleton").count()
 cl.get(f"/documents/{doc_id}/skeleton/1")
 with A.app.app_context():
     sk = GameSkeleton.query.filter_by(document_id=doc_id, game_index=1).first()
     checks["скелет пересобран после правки"] = sk.simulatable is True and bool(sk.code)
+    checks["экран не зовёт агента повторно"] = Job.query.filter_by(
+        document_id=doc_id, game_index=1, step="skeleton").count() == sk_jobs_after
 
 # --- без отчёта о балансе экран закрыт ---------------------------------------
 closed = cl.get(f"/documents/{doc_id}/redesign/1", follow_redirects=True).get_data(as_text=True)

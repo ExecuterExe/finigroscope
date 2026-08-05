@@ -185,7 +185,9 @@ done = c.post(f"/documents/{doc_id}/gate2/1/reply",
               follow_redirects=True).get_data(as_text=True)
 checks["ответ разобран"] = calls["gate2_answer"] == 1
 checks["структура пересобрана"] = calls["extract"] == extract_before + 1
-checks["флеш о пересборке"] = "структура пересобрана" in done
+# Формулировка изменилась вместе с переходом на фоновые задачи: пересборка
+# теперь начинается, а не завершается к моменту ответа страницы.
+checks["флеш о пересборке"] = "пересобираем структуру" in done
 
 with A.app.app_context():
     ms = MirrorSession.query.filter_by(document_id=doc_id, game_index=1).first()
