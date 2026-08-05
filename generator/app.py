@@ -12,6 +12,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 from config import config
+from agents import lens_review
 from agents import mechanics
 from agents import module_auditor
 import llm
@@ -107,6 +108,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/llm/complete": self.route_complete,
             "/api/generate/mechanics": self.route_mechanics,
             "/api/audit/mechanics": self.route_audit_mechanics,
+            "/api/lenses/module": self.route_lenses,
         }
         handler = routes.get(path)
         if not handler:
@@ -186,6 +188,38 @@ class Handler(BaseHTTPRequestHandler):
         # подписи пунктов: в map ходят идентификаторы, показывать нужно текст
         answer["labels"] = module_auditor.checklist_labels("mechanics")
         self.send_json(answer)
+
+    # Третий шаг конвейера: модуль, прошедший аудит без критичных замечаний,
+    # уходит на качественную оценку по линзам Шелла. Агент живёт в ФинИгроСкопе
+    # (см. agents/lens_review.py), здесь только стыковка с опросником.
+    def route_lenses(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        module = payload.get("module")
+        if not isinstance(module, dict) or not module:
+            self.send_json({"error": "нужно поле module с оцениваемым модулем",
+                            "stage": "модуль"}, 400)
+            return
+
+        audit = payload.get("audit")
+        if not isinstance(audit, dict) or not audit:
+            self.send_json({"error": "нужно поле audit с ответом аудитора: "
+                                     "линзы идут ПОСЛЕ него",
+                            "stage": "аудит"}, 400)
+            return
+
+        phase = payload.get("phase") or "mechanics"
+        try:
+            result = lens_review.evaluate(phase, module, params, audit)
+        except lens_review.LensError as error:
+            self.send_json({"error": str(error), "stage": "линзы"}, 502)
+            return
+
+        self.send_json(result)
 
     def route_complete(self, payload):
         messages = payload.get("messages")

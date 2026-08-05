@@ -217,7 +217,29 @@ def build_input(game_spec_root: dict, canonical_text: str = None,
     }
 
 
-def build_message(data: dict) -> str:
+def _scope_core(scope) -> dict:
+    """Ядро линз для этого прохода.
+
+    Без области — полное ядро, то есть ровно прежнее поведение ФинИгроСкопа.
+    Область задаётся только когда оценивается ОТДЕЛЬНЫЙ модуль игры (генератор,
+    см. review/lens_scope.py): спрашивать у модели 47 линз о куске игры, который
+    физически не содержит материала для трёх четвертей из них, — значит платить
+    за N/A и получать балл, посчитанный неизвестно по чему.
+    """
+    core = (scope or {}).get("core")
+    return core if core else CORE
+
+
+def _scope_education(scope) -> tuple:
+    """Линзы, которым N/A запрещён. Без области — правило ФинИгроСкопа."""
+    if scope is None:
+        return EDUCATION_LENSES
+    return tuple(scope.get("education_lenses") or ())
+
+
+def build_message(data: dict, scope: dict = None) -> str:
+    core = _scope_core(scope)
+    core_lenses = sorted(n for nums in core.values() for n in nums)
     parts = [
         "=== game_spec.text (концепт, правила, компоненты, рекомендации) ===",
         json.dumps(data["text"], ensure_ascii=False, indent=2),
@@ -286,12 +308,31 @@ def build_message(data: dict) -> str:
     # Список ядра подаём явно: «каждая линза ядра присутствует в выходе» —
     # первый пункт самопроверки промпта, и проще всего его выполнить, имея
     # перечень перед глазами.
-    core_lines = [f"  {name}: " + ", ".join(map(str, nums)) for name, nums in CORE.items()]
+    core_lines = [f"  {name}: " + ", ".join(map(str, nums)) for name, nums in core.items()]
     parts += [
         "",
-        f"=== РАБОЧЕЕ ЯДРО: {len(CORE_LENSES)} линз в {len(CORE)} категориях ===",
+        f"=== РАБОЧЕЕ ЯДРО: {len(core_lenses)} линз в {len(core)} категориях ===",
         "\n".join(core_lines),
-        "",
+        "",]
+
+    if scope:
+        parts += [
+            "Это ЧАСТЬ игры, а не игра целиком: оценивается модуль "
+            f"«{scope.get('phase')}». Категории вне списка выше к нему "
+            "неприменимы — их не оценивай и не упоминай. Не достраивай "
+            "недостающие части игры в уме: чего нет в присланных материалах, "
+            "того нет.",
+            "",
+        ]
+        if not scope.get("educational"):
+            parts += [
+                "Игра НЕ заявлена как обучающая (вопрос 1 опросника). Линзы 97 и "
+                "98 об обучающей цели оценивай только если материалы дают для "
+                "этого основание; иначе честный N/A с причиной, а не низкий балл.",
+                "",
+            ]
+
+    parts += [
         "Имена категорий в ответе указывай ТОЧНО как в списке выше — по ним "
         "синтезатор находит вес категории, и любое расхождение молча выкинет её "
         "из итогового балла вместе со всеми находками.",
@@ -378,16 +419,22 @@ def needs_playtest(sim_meta: dict) -> dict:
 
 
 # --- валидация ---------------------------------------------------------------
-def validate(report: dict, data: dict = None) -> list:
+def validate(report: dict, data: dict = None, scope: dict = None) -> list:
     """Самопроверка промпта, выполненная кодом. Ответ не «чинится».
 
     Ловятся те нарушения, которые в готовом отчёте выглядят как нормальная
     работа: заниженная за N/A категория, потерянный вопрос диагноста, имя
     категории с лишним словом, пропущенная рекомендация о плейтесте.
+
+    `scope` сужает требования до одного модуля игры (см. review/lens_scope.py).
+    Без него проверяется полное ядро — прежнее поведение ФинИгроСкопа.
     """
     issues = []
     report = report or {}
     data = data or {}
+    core = _scope_core(scope)
+    core_lenses = sorted(n for nums in core.values() for n in nums)
+    education_lenses = _scope_education(scope)
     cats = report.get("categories") or []
     seen = all_lenses(report)
 
@@ -395,11 +442,11 @@ def validate(report: dict, data: dict = None) -> list:
     # синтезатор ищет категорию по имени и молча роняет ненайденную.
     for cat in cats:
         name = cat.get("name")
-        if name not in CORE:
+        if name not in core:
             near = ""
             if isinstance(name, str):
                 base = re.sub(r"\s*\(.*?\)\s*$", "", name).strip()
-                if base in CORE:
+                if base in core:
                     near = (f" Похоже, это «{base}» со скобочным пояснением — "
                             "в ответе оно недопустимо.")
             issues.append(_issue(
@@ -408,23 +455,23 @@ def validate(report: dict, data: dict = None) -> list:
                 "Синтезатор сопоставляет категории по имени: ненайденная выпадет из "
                 "итогового балла вместе со всеми своими находками.", "error"))
 
-    for missing in [c for c in CORE if c not in {x.get("name") for x in cats}]:
+    for missing in [c for c in core if c not in {x.get("name") for x in cats}]:
         issues.append(_issue(
             "category_missing",
             f"Категория «{missing}» отсутствует в ответе целиком. Неприменимая "
             "категория обязана присутствовать с пометкой N/A, а не исчезать.", "error"))
 
     # 2) ПОЛНОТА ЯДРА: каждая линза — с оценкой или с N/A и причиной.
-    lost = [n for n in CORE_LENSES if n not in seen]
+    lost = [n for n in core_lenses if n not in seen]
     if lost:
         issues.append(_issue(
             "lenses_missing",
             f"В ответе нет {len(lost)} линз ядра: {', '.join(map(str, lost[:15]))}"
             + ("…" if len(lost) > 15 else "")
-            + f". Ожидалось ровно {len(CORE_LENSES)} — по одной на каждую линзу ядра.",
+            + f". Ожидалось ровно {len(core_lenses)} — по одной на каждую линзу ядра.",
             "error"))
 
-    outside = sorted(n for n in seen if n not in CORE_LENSES)
+    outside = sorted(n for n in seen if n not in core_lenses)
     declared = {int(x) for x in (report.get("out_of_core_used") or [])
                 if isinstance(x, (int, str)) and str(x).isdigit()}
     for n in outside:
@@ -466,7 +513,7 @@ def validate(report: dict, data: dict = None) -> list:
                 "прослеживаться до фразы материалов."))
 
     # 4) ПРАВИЛО-ИСКЛЮЧЕНИЕ: обучающая цель не может быть N/A.
-    for n in EDUCATION_LENSES:
+    for n in education_lenses:
         lens = seen.get(n)
         if lens and is_na(lens):
             issues.append(_issue(
@@ -558,15 +605,24 @@ def validate(report: dict, data: dict = None) -> list:
 
 
 # --- вызов -------------------------------------------------------------------
-def run(data: dict, provider_name: str = None, cache_dir: str = None) -> dict:
+def run(data: dict, provider_name: str = None, cache_dir: str = None,
+        scope: dict = None, message: str = None) -> dict:
     """Один вызов агента. Возвращает {available, report, issues, raw, provider}.
 
     Средние по категориям подменяются посчитанными ПОСЛЕ валидации: расхождение
     уже зафиксировано отдельным замечанием, а дальше по конвейеру должно уйти
     верное число. Оценки самих линз — суждение агента, они не трогаются.
+
+    `scope` — область применимости для оценки отдельного модуля игры. Без него
+    работа идёт по полному ядру, как и раньше.
+
+    `message` — готовое сообщение вместо собранного здесь. Нужно вызывающему,
+    который добавляет свои блоки (review/lens_module.py подкладывает параметры
+    игры из опросника). Повтор при неудачной валидации достраивается поверх
+    именно его — иначе второй заход ушёл бы уже без этих блоков.
     """
     system = prompts.load_lenses_prompt()
-    user = build_message(data)
+    user = message if message is not None else build_message(data, scope)
 
     provider = get_provider(provider_name, cache_dir=cache_dir)
     resp = provider.complete(system, user, timeout=LLM_TIMEOUT)
@@ -580,7 +636,7 @@ def run(data: dict, provider_name: str = None, cache_dir: str = None) -> dict:
                          "как JSON.",
                 "raw": resp.text}
 
-    issues = validate(report, data)
+    issues = validate(report, data, scope)
 
     # Повтор просим только по тем нарушениям, которые модель должна чинить сама.
     # Расхождение в среднем к ним не относится: правильное значение известно
@@ -597,7 +653,7 @@ def run(data: dict, provider_name: str = None, cache_dir: str = None) -> dict:
         if resp2.available:
             report2 = _extract_json(resp2.text)
             if report2 is not None:
-                issues2 = validate(report2, data)
+                issues2 = validate(report2, data, scope)
                 if len(issues2) < len(issues):
                     report, issues, resp = report2, issues2, resp2
 

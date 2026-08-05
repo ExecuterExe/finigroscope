@@ -9,6 +9,7 @@
 """
 
 import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -51,6 +52,7 @@ from models import (
 from review import diagnost as diagnost_agent
 from review import extractor as extractor_agent
 from review import lens_evaluator as lens_agent
+from review import lens_module, lens_queue
 from review import llm_provider, llm_settings
 from review import mirror as mirror_agent
 from review import redesigner as redesign_agent
@@ -288,6 +290,98 @@ def job_cancel(job_id):
         flash("Задача уже завершилась — останавливать нечего.", "warning")
     return redirect(request.referrer
                     or url_for("games", doc_id=document.id))
+
+
+# --- API для соседних сервисов экосистемы -----------------------------------
+# «Генератор игр» собирает игру по частям и после аудита каждого модуля просит
+# оценить его по линзам Шелла. Владельцем линз остаётся ФинИгроСкоп: агент,
+# промпт, валидатор и веса категорий живут в одном месте, иначе через месяц у
+# двух сервисов будут две разные шкалы Шелла с одинаковым названием.
+#
+# Ответ ВСЕГДА асинхронный. Линзы читают много и отвечают до пяти минут
+# (lens_evaluator.LLM_TIMEOUT = 300), а ФинИгроСкоп обязан работать одним
+# воркером — синхронный ответ занял бы его целиком и положил сервис для всех.
+
+LENS_API_TOKEN = os.environ.get("LENS_API_TOKEN", "").strip()
+
+
+def _lens_api_denied():
+    """Причина отказа или None. Закрыто по умолчанию — вызов стоит денег.
+
+    Эндпоинт тратит деньги на модель, поэтому без общего секрета он работает
+    ТОЛЬКО на сервере разработки. На боевом (gunicorn, debug выключен)
+    незаданный LENS_API_TOKEN — это отказ, а не «пока так поработает»: открытый
+    платный эндпоинт находят быстрее, чем про него вспоминают.
+    """
+    if LENS_API_TOKEN:
+        # Сравниваем БАЙТЫ, а не строки: compare_digest на строке с любым
+        # символом вне ASCII бросает TypeError, и токен с кириллицей ронял бы
+        # эндпоинт в 500 вместо честного отказа. Отказ должен быть отказом при
+        # любом значении, которое кто-то впишет в .env.
+        supplied = request.headers.get("X-Lens-Token", "")
+        if not hmac.compare_digest(supplied.encode("utf-8", "replace"),
+                                   LENS_API_TOKEN.encode("utf-8", "replace")):
+            return "Неверный или отсутствующий X-Lens-Token."
+        return None
+    if app.debug:
+        return None
+    return ("LENS_API_TOKEN не задан. Оценка по линзам тратит деньги на модель, "
+            "поэтому без общего секрета доступна только в разработке. "
+            "Задайте LENS_API_TOKEN в .env обоих сервисов.")
+
+
+@app.route("/api/lenses/module", methods=["POST"])
+def lens_module_submit():
+    """Ставит оценку модуля в очередь. Отвечает сразу, не дожидаясь модели.
+
+    Вход: {phase, module, params, audit}. `audit` — ответ агента-аудитора
+    генератора: по нему КОД решает, звать ли линзы вообще.
+    """
+    denied = _lens_api_denied()
+    if denied:
+        return jsonify({"error": denied}), 403
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Ожидается объект JSON."}), 400
+
+    phase = payload.get("phase")
+    module = payload.get("module")
+    if not isinstance(phase, str) or not phase:
+        return jsonify({"error": "Нужно поле phase с именем модуля."}), 400
+    if not isinstance(module, dict) or not module:
+        return jsonify({"error": "Нужно поле module с содержимым модуля."}), 400
+
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    audit = payload.get("audit") if isinstance(payload.get("audit"), dict) else {}
+
+    # Условие вызова проверяем ЗДЕСЬ, а не в задаче: ответ мгновенный, и незачем
+    # заводить задачу, чтобы через миг сообщить, что звать линзы было нельзя.
+    gate = lens_module.should_run(audit)
+    if not gate["ready"]:
+        return jsonify({"ready": False, "reason": gate["reason"],
+                        "blocking": gate.get("blocking") or {}}), 200
+
+    provider = payload.get("provider") if isinstance(payload.get("provider"), str) else None
+    job_id = lens_queue.submit(
+        lambda: lens_module.evaluate(phase, module, params, audit,
+                                     provider_name=provider))
+    return jsonify({"ready": True, "job_id": job_id,
+                    "status_url": url_for("lens_module_status", job_id=job_id)}), 202
+
+
+@app.route("/api/lenses/module/<job_id>.json")
+def lens_module_status(job_id):
+    """Состояние оценки. Генератор опрашивает, пока идёт."""
+    denied = _lens_api_denied()
+    if denied:
+        return jsonify({"error": denied}), 403
+
+    state = lens_queue.status(job_id)
+    if state is None:
+        return jsonify({"error": "Задача не найдена — возможно, сервис "
+                                 "перезапускался. Запросите оценку заново."}), 404
+    return jsonify(state)
 
 
 # --- публичные маршруты -----------------------------------------------------

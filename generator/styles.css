@@ -670,6 +670,97 @@ body.nav-open {
     font-size: 13px;
 }
 
+/* ---------- оценка по линзам Шелла ---------- */
+.lens {
+    margin-top: 22px;
+    padding-top: 20px;
+    border-top: 1px solid var(--card-border);
+}
+
+.lens-head {
+    margin-bottom: 16px;
+}
+
+/* Балл — главное число на экране, поэтому крупно и отдельно от текста. */
+.lens-score {
+    margin: 10px 0 6px;
+    font-size: 44px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -1px;
+}
+
+.lens-score.ok { color: var(--accent); }
+.lens-score.low { color: #f8b26a; }
+
+.lens-max {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+/* Полоса покрытия: сколько веса категорий реально участвовало в балле. Без неё
+   балл за один модуль выглядит как балл за игру целиком. */
+.lens-cover {
+    margin: 14px 0 18px;
+}
+
+.lens-cover-bar {
+    height: 8px;
+    margin-bottom: 8px;
+    background: var(--card-border);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.lens-cover-bar span {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-soft), var(--accent));
+    border-radius: 999px;
+}
+
+.lens-table {
+    width: 100%;
+    margin-bottom: 16px;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.lens-table th,
+.lens-table td {
+    padding: 7px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.lens-table th {
+    color: var(--text-dim);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.lens-table td:nth-child(2),
+.lens-table td:nth-child(3) {
+    white-space: nowrap;
+}
+
+/* Категории вне области модуля: видны, но приглушены — по ним сразу понятно,
+   что балл их не учитывает и почему. */
+.lens-table tr.lens-out td {
+    color: var(--text-dim);
+    opacity: 0.65;
+}
+
+.lens-skip {
+    padding: 14px 16px;
+    background: rgba(248, 178, 106, 0.08);
+    border: 1px solid rgba(248, 178, 106, 0.35);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+}
+
 /* Кнопка-ссылка (переход в соседний сервис). Ссылке нужно снять подчёркивание
    и сделать её блочной — иначе padding у inline-элемента не даёт той же высоты,
    что у соседних <button>, и шапка едет. */

@@ -72,6 +72,17 @@ class Config:
         # Соседний сервис экосистемы: кнопка перехода в шапке страницы. Зашивать
         # адрес в HTML нельзя — в разработке это порт, на сервере путь за nginx.
         self.finigroskop_url = _text("FINIGROSKOP_URL", "http://localhost:5000")
+
+        # Адрес ФинИгроСкопа для вызовов СЕРВЕР-СЕРВЕР (оценка по линзам Шелла).
+        # Отдельная переменная, а не повторное использование FINIGROSKOP_URL:
+        # та предназначена браузеру и на сервере равна пути «/», по которому
+        # Python постучаться не сможет. Здесь всегда нужен полный адрес.
+        self.lens_api_url = _text("LENS_API_URL", "http://127.0.0.1:5000")
+        # Общий секрет: эндпоинт линз тратит деньги на модель и закрыт им.
+        self.lens_api_token = _text("LENS_API_TOKEN")
+        # Линзы отвечают дольше генерации: читают модуль и разбирают его по
+        # десяткам линз. Ждём столько же, сколько отведено самому агенту.
+        self.lens_timeout = _number("LENS_TIMEOUT", 330, int)
         self.timeout = _number("LLM_TIMEOUT", 60, int)
         self.max_tokens = _number("LLM_MAX_TOKENS", 2000, int)
         self.temperature = _number("LLM_TEMPERATURE", 0.7, float)

@@ -1225,9 +1225,17 @@ function auditVariant(variantId, btn) {
             return { status: response.status, body: body };
         });
     }).then(function(res) {
-        slot.innerHTML = res.body && res.body.map
-            ? auditHtml(res.body, variantId)
-            : genErrorHtml(res.body);
+        const audit = res.body;
+        if (!audit || !audit.map) {
+            slot.innerHTML = genErrorHtml(audit);
+            return;
+        }
+        slot.innerHTML = auditHtml(audit, variantId);
+        // Третий шаг конвейера: модуль без критичных замечаний уходит на оценку
+        // по линзам Шелла. Решение принимается по НАХОДКАМ, а не по вердикту
+        // audit.passed: линзы стоят денег и минут, и запускать их по модулю,
+        // который всё равно уйдёт на перегенерацию, незачем.
+        runLenses(chosen, audit, variantId);
     }).catch(function(e) {
         slot.innerHTML = genErrorHtml({ error: 'Сервер не ответил: ' + e.message });
     }).then(function() {
@@ -1309,9 +1317,155 @@ function auditHtml(body, variantId) {
 
     html += '<p class="gen-note">' +
         (body.passed
-            ? 'Дальше по конвейеру этот модуль ушёл бы на генерацию сюжета.'
+            ? 'Аудит пройден. Следующий шаг — оценка по линзам Шелла.'
             : 'При таком результате оркестратор вернул бы находки генератору ' +
               'механик и запросил новый вариант.') +
+        '</p>';
+
+    // Место под оценку по линзам. Создаётся здесь, а не в index.html, чтобы
+    // при повторной проверке варианта оно очищалось вместе с самим аудитом:
+    // иначе рядом со свежим аудитом висел бы балл от прошлого прогона.
+    html += '<div id="lensSlot"></div>';
+
+    html += '</div>';
+
+    return html;
+}
+
+/* ---------- оценка по линзам Шелла ---------- */
+/* Агент живёт в ФинИгроСкопе: он владеет 47 линзами, весами категорий и шкалой.
+   Здесь только показ результата — считать балл на странице нельзя, иначе у двух
+   сервисов появятся две шкалы Шелла с одинаковым названием. */
+
+function lensBlockers(audit) {
+    const violations = (audit.map || []).filter(function(r) {
+        return r.status === 'violation';
+    });
+    const critical = (audit.issues || []).filter(function(i) {
+        return i.severity === 'critical';
+    });
+    return violations.length + critical.length;
+}
+
+function runLenses(module, audit, variantId) {
+    const slot = document.getElementById('lensSlot');
+    if (!slot) return;
+
+    if (lensBlockers(audit)) {
+        slot.innerHTML = '<div class="lens lens-skip">' +
+            '<b>Линзы Шелла пропущены.</b> У аудитора остались критичные ' +
+            'замечания — модуль сперва чинят, иначе оценка устареет в момент ' +
+            'правки.</div>';
+        return;
+    }
+
+    slot.innerHTML = '<div class="gen-wait">Оцениваю модуль по линзам Шелла. ' +
+        'Агент живёт в ФинИгроСкопе, ответ занимает до нескольких минут.</div>';
+
+    fetch('api/lenses/module', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            phase: 'mechanics',
+            answers: answers,
+            module: module,
+            audit: audit
+        })
+    }).then(function(response) {
+        return response.json().then(function(body) {
+            return { status: response.status, body: body };
+        });
+    }).then(function(res) {
+        slot.innerHTML = lensHtml(res.body, variantId);
+    }).catch(function(e) {
+        slot.innerHTML = genErrorHtml({ error: 'Сервер не ответил: ' + e.message });
+    });
+}
+
+function lensHtml(body, variantId) {
+    if (!body || body.error) {
+        return genErrorHtml(body || { error: 'Пустой ответ' });
+    }
+    if (body.ready === false) {
+        return '<div class="lens lens-skip"><b>Линзы Шелла пропущены.</b> ' +
+            esc(body.reason || '') + '</div>';
+    }
+    if (body.available === false) {
+        return genErrorHtml({ error: body.error || 'Модель не ответила' });
+    }
+
+    const score = body.score || {};
+    const covered = Math.round((score.weight_covered || 0) * 100);
+    const passed = score.passed;
+
+    let html = '<div class="lens">' +
+        '<div class="lens-head">' +
+            '<span class="badge' + (passed ? ' success' : '') + '">' +
+                (passed ? 'Порог пройден' : 'Ниже порога') +
+            '</span>' +
+            '<h3 class="gen-title">Линзы Шелла — вариант ' + esc(variantId) + '</h3>' +
+            '<div class="lens-score' + (passed ? ' ok' : ' low') + '">' +
+                esc(score.overall === null || score.overall === undefined
+                    ? '—' : score.overall) +
+                '<span class="lens-max"> / 10</span>' +
+            '</div>' +
+            '<p class="gen-note">Порог ' + esc(score.passing_score) +
+                '. Оценено категорий ' + esc(score.categories_scored) +
+                ' из ' + esc(score.categories_in_scope) + ' применимых, ' +
+                'линз ' + esc((body.scope || {}).lenses ? body.scope.lenses.length : 0) +
+                '.</p>' +
+        '</div>';
+
+    /* Главное, что нужно показать рядом с баллом: какую долю веса он охватывает.
+       Без этого 8.4 за модуль механик неотличимы от 8.4 за игру целиком, хотя
+       считаются по разному числу категорий. Формулой это не чинится — только
+       показом. */
+    html += '<div class="lens-cover">' +
+        '<div class="lens-cover-bar"><span style="width:' + covered + '%"></span></div>' +
+        '<p class="gen-note">Балл посчитан по <b>' + covered + '%</b> веса всех ' +
+            'категорий: модуль механик физически не содержит материала для ' +
+            'остальных. Это не пробел в оценке — остальное оценивается на ' +
+            'своих этапах.</p>' +
+    '</div>';
+
+    html += '<table class="lens-table"><thead><tr>' +
+        '<th>Категория</th><th>Вес</th><th>Балл</th></tr></thead><tbody>' +
+        (score.rows || []).map(function(r) {
+            const cls = r.in_scope ? '' : ' class="lens-out"';
+            const value = (r.score === null || r.score === undefined)
+                ? '<i>' + esc(r.na_reason || 'не оценена') + '</i>'
+                : esc(r.score);
+            return '<tr' + cls + '><td>' + esc(r.category) + '</td>' +
+                '<td>' + esc(r.weight) + '</td><td>' + value + '</td></tr>';
+        }).join('') + '</tbody></table>';
+
+    const findings = (body.report || {}).findings || [];
+    if (findings.length) {
+        html += '<div class="audit-issues">' +
+            '<div class="compat-title">Находки по линзам (' + findings.length + ')</div>' +
+            '<ul class="conflict-list">' + findings.map(function(f) {
+                return '<li class="gen-problem">' +
+                    (f.severity ? '<span class="sev sev-' + esc(f.severity) + '">' +
+                        esc(f.severity) + '</span> ' : '') +
+                    (f.lens ? '<b>Линза ' + esc(f.lens) + '</b><br>' : '') +
+                    esc(f.detail || f.text || '') +
+                '</li>';
+            }).join('') + '</ul></div>';
+    }
+
+    if ((body.issues || []).length) {
+        html += '<details class="audit-anomalies">' +
+            '<summary>Служебное: замечания к ответу агента (' +
+                body.issues.length + ')</summary><ul>' +
+            body.issues.map(function(i) {
+                return '<li>' + esc(i.code) + ': ' + esc(i.message) + '</li>';
+            }).join('') + '</ul></details>';
+    }
+
+    html += '<p class="gen-note">' + (passed
+        ? 'Модуль принят и по чек-листу, и по линзам — дальше по конвейеру ' +
+          'он ушёл бы на генерацию сюжета.'
+        : 'Балл ниже порога: оркестратор запросил бы новый вариант механик.') +
         '</p></div>';
 
     return html;
