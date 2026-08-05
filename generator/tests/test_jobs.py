@@ -105,6 +105,47 @@ def test_завершённую_задачу_отменить_нельзя():
     assert jobs.request_cancel(job_id) is False
 
 
+class ЧеловеческаяОшибка(Exception):
+    """Как PipelineError и LensError: текст написан для показа."""
+
+    user_facing = True
+
+
+def test_помеченная_ошибка_доходит_до_экрана_целиком():
+    """Причина вычислена и записана в исключение — выбрасывать её перед самым
+    показом значит оставить пользователя вообще без объяснения."""
+    текст = ("Ни одна из 3 попыток не дошла до оценки. Причины: попытка 1 — "
+             "критичные замечания: elimination_respected (аудит)")
+
+    def работа(progress):
+        raise ЧеловеческаяОшибка(текст)
+
+    assert wait(jobs.submit(работа))["error"] == текст
+
+
+def test_пустой_текст_не_оставляет_пользователя_ни_с_чем():
+    def работа(progress):
+        raise ЧеловеческаяОшибка("")
+
+    error = wait(jobs.submit(работа))["error"]
+    assert "ЧеловеческаяОшибка" in error
+    assert error.strip() != ""
+
+
+def test_непомеченный_текст_наружу_не_идёт_даже_короткий():
+    """Основание показать текст — только метка, а не его вид.
+
+    `RuntimeError("секрет-из-промпта")` короток и однострочен, но показывать
+    его нельзя: решает автор сообщения, а не длина строки.
+    """
+    def работа(progress):
+        raise ValueError("ключ sk-or-v1-abcdef")
+
+    error = wait(jobs.submit(работа))["error"]
+    assert "sk-or-v1" not in error
+    assert "ValueError" in error
+
+
 def test_упавшая_задача_не_выносит_текст_исключения():
     def работа(progress):
         raise RuntimeError("секрет-из-промпта")

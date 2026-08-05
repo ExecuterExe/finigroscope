@@ -1002,8 +1002,10 @@ function renderOutro() {
             'аудитором и линзами. Конвейер отсюда не продолжается: сюжет ' +
             'строится только поверх модуля, принятого полным проходом.</p>' +
         '<div class="gen-slot" id="genSlot"></div>' +
+        '<div class="gen-slot" id="componentsBaseSlot"></div>' +
         '<div class="gen-slot" id="storySlot"></div>' +
-        '<div class="gen-slot" id="featuresSlot"></div>';
+        '<div class="gen-slot" id="featuresSlot"></div>' +
+        '<div class="gen-slot" id="componentsFinalSlot"></div>';
 
     bindConflictJumps(screen);
     screen.querySelectorAll('.res-row').forEach(function(row) {
@@ -1387,7 +1389,9 @@ const MECHANICS_PASS = {
     busyLabel: 'Иду по конвейеру...',
     idleLabel: 'Собрать модуль с проверкой',
     body: function() { return { answers: answers }; },
-    render: function(result) { return pipelineHtml(result); }
+    render: function(result) { return pipelineHtml(result); },
+    // Проход 1 этапа 5: базовые количества, которые уйдут в симуляцию.
+    components: { slotId: 'componentsBaseSlot', pass: 'base' }
 };
 
 const STORY_PASS = {
@@ -1423,7 +1427,10 @@ const FEATURES_PASS = {
             accept_anyway: !(mechanicsPassed && storyPassed)
         };
     },
-    render: function(result) { return featuresHtml(result); }
+    render: function(result) { return featuresHtml(result); },
+    // Проход 2 этапа 5: пересчёт с дельтой плюс материал — к этому моменту
+    // известны и особенности, и адаптация.
+    components: { slotId: 'componentsFinalSlot', pass: 'final' }
 };
 
 function runPipeline(hardConflicts) {
@@ -1445,7 +1452,8 @@ function runPipeline(hardConflicts) {
        которого уже нет. */
     mechanicsJobId = null;
     mechanicsPassed = false;
-    clearSlots(['storySlot', 'featuresSlot']);
+    clearSlots(['componentsBaseSlot', 'storySlot', 'featuresSlot',
+                'componentsFinalSlot']);
 
     startPass(MECHANICS_PASS);
 }
@@ -1461,7 +1469,7 @@ function runStory() {
        они ссылались на другие названия и другую историю. */
     storyJobId = null;
     storyPassed = false;
-    clearSlots(['featuresSlot']);
+    clearSlots(['featuresSlot', 'componentsFinalSlot']);
 
     startPass(STORY_PASS);
 }
@@ -1566,6 +1574,12 @@ function passPoll(pass, jobId, started) {
                 }
                 passStop(pass, pass.render(body.result));
                 bindNextStage();
+                /* Компоненты считаются сразу за модулем, а не отдельной
+                   кнопкой: расчёт мгновенный и бесплатный, а числа нужны
+                   следующему шагу (симуляции) в любом случае. */
+                if (pass.components) {
+                    loadComponents(pass.components.slotId, pass.components.pass);
+                }
                 return;
             }
             if (body.status === 'failed') {
@@ -1666,6 +1680,11 @@ function pipelineHtml(result) {
             return '<li class="gen-problem">' + esc(w) + '</li>';
         }).join('') + '</ul>';
     }
+
+    /* Сам модуль — ПЕРЕД таблицей попыток и разбором, как у сюжета и
+       особенностей. Он и есть результат этапа; отчёты аудитора и линз — это
+       про него, а не вместо него. */
+    html += mechanicsCardHtml(best.variant || {});
 
     html += pipeAttemptsTable(result.attempts || []);
 
@@ -1870,6 +1889,97 @@ function nextStageHtml(buttonId, passed, okLabel, okHint, anywayLabel, anywayHin
     '</div>';
 }
 
+/* Описание принятого модуля механик. У сюжета и особенностей такие карточки
+   были с самого начала, а у механик — нет: показывались только отчёт аудитора и
+   балл линз. Человек видел оценку модуля, но не сам модуль, — а именно он и
+   есть результат этапа 2. */
+function mechanicsCardHtml(variant) {
+    if (!variant || !variant.title) return '';
+
+    const loop = variant.game_loop || {};
+    const steps = loop.turn_structure || [];
+    const check = loop.success_check || {};
+
+    let html = '<div class="story-card">' +
+        '<div class="story-name">' + esc(variant.title) + '</div>';
+
+    if ((variant.core_mechanics || []).length) {
+        html += '<div class="variant-mech">' +
+            variant.core_mechanics.map(function(m) {
+                return '<span class="chip">' + esc(m.id || '') +
+                    (m.role ? ' — ' + esc(m.role) : '') + '</span>';
+            }).join('') + '</div>';
+    }
+
+    if (steps.length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Ход игрока</span><ol class="story-list">' +
+            steps.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') +
+            '</ol></div>';
+    }
+
+    if (check.rule || check.type) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Проверка успеха</span><p>' +
+            esc([check.type, check.rule].filter(Boolean).join(': ')) + '</p>' +
+            ((check.outcomes || []).length
+                ? '<ul class="story-list">' + check.outcomes.map(function(o) {
+                      return '<li>' + esc(o) + '</li>';
+                  }).join('') + '</ul>'
+                : '') +
+            '</div>';
+    }
+
+    [['turn_order', 'Передача хода', loop],
+     ['resource_flow', 'Движение ресурсов', loop],
+     ['progression', 'Как партия движется к концу', loop]].forEach(function(f) {
+        const value = f[2][f[0]];
+        if (!value) return;
+        html += '<div class="story-field">' +
+            '<span class="story-label">' + f[1] + '</span>' +
+            '<p>' + esc(value) + '</p></div>';
+    });
+
+    [[(variant.win_condition || {}).description, 'Условие победы'],
+     [(variant.lose_condition || {}).description, 'Условие поражения'],
+     [variant.catch_up_mechanism, 'Как игра помогает отстающим'],
+     [variant.randomness_role, 'Роль случайности'],
+     [variant.fit_rationale, 'Почему подходит под ваши ответы']].forEach(function(f) {
+        if (!f[0]) return;
+        html += '<div class="story-field">' +
+            '<span class="story-label">' + f[1] + '</span>' +
+            '<p>' + esc(f[0]) + '</p></div>';
+    });
+
+    const facts = [];
+    if (variant.estimated_duration_minutes) {
+        facts.push('партия ~' + esc(variant.estimated_duration_minutes) + ' мин');
+    }
+    if (variant.estimated_turns_per_player) {
+        facts.push('ходов на игрока ~' + esc(variant.estimated_turns_per_player));
+    }
+    if ((variant.required_component_types || []).length) {
+        facts.push('компоненты: ' + esc(variant.required_component_types.join(', ')));
+    }
+    if (facts.length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Кратко</span>' +
+            '<p>' + facts.join(' · ') + '</p></div>';
+    }
+
+    /* Риски показываем вместе с модулем, а не прячем в разбор: это то, что
+       автор должен прочитать до того, как строить поверх сюжет. */
+    if ((variant.risks || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Риски</span><ul class="story-list">' +
+            variant.risks.map(function(r) {
+                return '<li>' + esc(r) + '</li>';
+            }).join('') + '</ul></div>';
+    }
+
+    return html + '</div>';
+}
+
 function storyCardHtml(variant) {
     if (!variant.title) return '';
 
@@ -1952,6 +2062,113 @@ function bindPassRetry(pass) {
             runPipeline(0);
         }
     };
+}
+
+/* ---------- компоненты: количество и материал (этап 5) ---------- */
+/* Считает КОД по таблицам книги, модель не вызывается — поэтому ответ приходит
+   мгновенно и ждать нечего. Два прохода: после механик числа нужны симуляции,
+   после особенностей к ним добавляется материал. */
+
+function loadComponents(slotId, which) {
+    const slot = document.getElementById(slotId);
+    if (!slot) return;
+
+    slot.innerHTML = '<div class="gen-wait">Считаю компоненты по таблицам…</div>';
+
+    fetch('api/components', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: answers, pass: which })
+    }).then(function(response) {
+        return response.json();
+    }).then(function(body) {
+        slot.innerHTML = body && body.components
+            ? componentsHtml(body)
+            : genErrorHtml(body || { error: 'Пустой ответ' });
+    }).catch(function(e) {
+        slot.innerHTML = genErrorHtml({ error: 'Сервер не ответил: ' + e.message });
+    });
+}
+
+function componentsHtml(body) {
+    const final = body.pass === 'final';
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge success">Этап 5</span>' +
+            '<h3 class="gen-title">' +
+                (final ? 'Компоненты: количество и материал'
+                       : 'Компоненты: базовое количество') + '</h3>' +
+            '<p class="gen-note">' + (final
+                ? 'Пересчёт после особенностей. Материал выбран из разрешённых ' +
+                  'книгой с учётом возраста и места игры.'
+                : 'Числа для симуляции: столько нужно, чтобы игровой цикл ' +
+                  'работал. Материал определяется позже — после особенностей, ' +
+                  'когда станут известны адаптация и антураж.') +
+                ' Считает код по таблицам, модель не вызывается.</p>' +
+        '</div>';
+
+    html += '<table class="lens-table comp-table"><thead><tr>' +
+        '<th>Компонент</th><th>Количество</th>' +
+        (final ? '<th>Материал</th>' : '') +
+        '</tr></thead><tbody>';
+
+    (body.components || []).forEach(function(row) {
+        const amount = row.per_player
+            ? esc(row.quantity) + ' <span class="comp-dim">(' +
+              esc(row.per_player_count) + ' × ' + esc(row.players) + ' игр.)</span>'
+            : esc(row.quantity);
+        html += '<tr><td>' + esc(row.component) + '</td>' +
+            '<td>' + amount + '</td>' +
+            (final
+                ? '<td>' + esc((row.material || {}).chosen || '—') +
+                  ((row.material || {}).compromised
+                      ? ' <span class="comp-warn">под вопросом</span>' : '') +
+                  '</td>'
+                : '') +
+            '</tr>';
+
+        /* След расчёта — рядом с числом, а не отдельно. Когда симуляция скажет
+           «партия не сходится», первым вопросом будет «откуда взялось 55». */
+        html += '<tr class="comp-trace"><td colspan="' + (final ? 3 : 2) + '">' +
+            'база ' + esc(row.base[0]) + '–' + esc(row.base[1]) +
+            (row.steps || []).filter(function(s) { return s.step; })
+                .map(function(s) {
+                    return ' <span class="comp-step">' +
+                        (s.step > 0 ? '+' : '') + esc(s.step) + ' ' +
+                        esc(s.value) + '</span>';
+                }).join('') +
+            ' → ' + esc(row.range[0]) + '–' + esc(row.range[1]) +
+            (row.floored ? ' <b>(поднято до нижнего предела ' +
+                esc(row.floor) + ')</b>' : '') +
+            ' → ' + esc(row.per_player ? row.per_player_count : row.quantity) +
+            '</td></tr>';
+    });
+
+    html += '</tbody></table>';
+
+    if (final) {
+        const reasons = [];
+        (body.components || []).forEach(function(row) {
+            ((row.material || {}).reasons || []).forEach(function(r) {
+                if (reasons.indexOf(r) === -1) reasons.push(r);
+            });
+        });
+        if (reasons.length) {
+            html += '<p class="gen-note">Ограничения по материалам: ' +
+                reasons.map(esc).join('; ') + '.</p>';
+        }
+    }
+
+    if ((body.skipped || []).length) {
+        html += '<p class="gen-note">Не считаются по таблице (задаются вручную): ' +
+            body.skipped.map(esc).join(', ') + '.</p>';
+    }
+
+    html += '<p class="gen-note">Всего предметов в коробке: <b>' +
+        esc(body.total_pieces) + '</b>.</p></div>';
+
+    return html;
 }
 
 /* ---------- оценка по линзам Шелла ---------- */

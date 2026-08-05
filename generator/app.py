@@ -15,6 +15,7 @@ from pathlib import Path
 
 import reloader
 from config import config
+from agents import components as components_agent
 from agents import lens_review
 from agents import mechanics
 from agents import module_auditor
@@ -127,6 +128,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/pipeline/features": self.route_pipeline_features,
             "/api/pipeline/status": self.route_pipeline_status,
             "/api/pipeline/cancel": self.route_pipeline_cancel,
+            "/api/components": self.route_components,
         }
         handler = routes.get(path)
         if not handler:
@@ -486,6 +488,33 @@ class Handler(BaseHTTPRequestHandler):
                      "сам запрос нельзя, он уже отправлен."
                      if stopped else "Проход уже завершился."),
         })
+
+    # Этап 5 ТЗ: количество компонентов и материал. Отвечает СИНХРОННО и
+    # мгновенно — расчёт по таблицам, модель не вызывается. Заводить под него
+    # задачу в очереди значило бы городить ожидание там, где его нет.
+    def route_components(self, payload):
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        which = payload.get("pass") or "base"
+        if which not in ("base", "final"):
+            self.send_json({"error": "поле pass должно быть base или final",
+                            "stage": "компоненты"}, 400)
+            return
+
+        try:
+            if which == "base":
+                result = components_agent.base(params)
+            else:
+                result = components_agent.final(params)
+        except components_agent.ComponentsError as error:
+            self.send_json({"error": str(error), "stage": "компоненты"}, 422)
+            return
+
+        self.send_json(result)
 
     def route_complete(self, payload):
         messages = payload.get("messages")
