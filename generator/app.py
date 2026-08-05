@@ -8,10 +8,12 @@
 """
 
 import json
+import sys
 import traceback
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
+import reloader
 from config import config
 from agents import lens_review
 from agents import mechanics
@@ -98,6 +100,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", CONTENT_TYPES[resolved.suffix])
         self.send_header("Content-Length", str(len(data)))
+        # Страницу и её скрипты браузер держать в кеше НЕ должен. Иначе после
+        # правки app.js обычное обновление отдаёт старый файл, и получается
+        # пара «старая страница + новый сервер» — с ошибками, которые в коде уже
+        # исправлены. Ритуал «жми Ctrl+F5» — не решение, а способ забыть.
+        # Это сервер разработки, экономить на его трафике нечего.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 
@@ -114,7 +122,18 @@ class Handler(BaseHTTPRequestHandler):
         }
         handler = routes.get(path)
         if not handler:
-            self.send_json({"error": "неизвестный адрес"}, 404)
+            # Сообщение не просто «404»: чаще всего этот ответ означает не
+            # опечатку в адресе, а что страница новее работающего сервера.
+            # Прошлый текст «неизвестный адрес» об этом молчал, и на разгадку
+            # уходили минуты.
+            self.send_json({
+                "error": "Сервер не знает адрес %s. Известны: %s. "
+                         "Чаще всего это значит, что страница новее кода в "
+                         "запущенном сервере — перезапустите generator/app.py."
+                         % (path, ", ".join(sorted(routes))),
+                "stage": "маршрут",
+                "unknown_route": path,
+            }, 404)
             return
 
         payload = self.read_json()
@@ -275,6 +294,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Автоперезагрузка: родительский процесс следит за кодом и перезапускает
+    # этот же файл. Без неё правка маршрута молча не доезжала до работающего
+    # сервера, а страница (её браузер перечитывает сам) оказывалась новее кода —
+    # и отвечала «неизвестный адрес» на маршрут, который в исходниках есть.
+    if config.autoreload and not reloader.is_child():
+        sys.exit(reloader.supervise())
+
     host = "127.0.0.1"
     port = 8000
 

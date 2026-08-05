@@ -1359,8 +1359,7 @@ function runLenses(module, audit, variantId) {
         return;
     }
 
-    const started = Date.now();
-    lensWait(slot, started, 'ставлю в очередь');
+    const clock = lensClock(slot, 'ставлю в очередь');
 
     fetch('api/lenses/module', {
         method: 'POST',
@@ -1375,12 +1374,20 @@ function runLenses(module, audit, variantId) {
         return response.json();
     }).then(function(body) {
         if (!body || body.error || body.ready === false) {
-            slot.innerHTML = lensHtml(body, variantId);
+            clock.stop(lensHtml(body, variantId));
             return;
         }
-        lensPoll(slot, body.job_id, started, variantId);
+        /* Готовый результат вместо номера задачи означает сервер со старой
+           схемой, где ожидание шло внутри запроса. Показываем, что пришло:
+           ронять уже полученную (и оплаченную) оценку из-за версии сервера
+           было бы обиднее всего. */
+        if (!body.job_id) {
+            clock.stop(lensHtml(body, variantId));
+            return;
+        }
+        lensPoll(slot, body.job_id, clock, variantId);
     }).catch(function(e) {
-        slot.innerHTML = genErrorHtml({ error: 'Сервер не ответил: ' + e.message });
+        clock.stop(genErrorHtml({ error: 'Сервер не ответил: ' + e.message }));
     });
 }
 
@@ -1392,28 +1399,39 @@ const LENS_STATE_TEXT = {
     'running': 'агент разбирает модуль по линзам'
 };
 
-function lensWait(slot, started, state) {
-    const seconds = Math.round((Date.now() - started) / 1000);
-    slot.innerHTML = '<div class="gen-wait">' +
-        'Оцениваю модуль по линзам Шелла — <b>' + esc(state) + '</b>, ' +
-        '<span class="lens-clock">' + seconds + ' с</span>.<br>' +
-        'Агент живёт в ФинИгроСкопе и читает модуль целиком; это занимает ' +
-        'до нескольких минут. Страница обновится сама.' +
-    '</div>';
+/* Счётчик запускается СРАЗУ, ещё до ответа на заявку, и тикает до самого конца.
+   Иначе на первом живом прогоне он простоял на «0 с» полторы минуты: секунды
+   начинали идти только после ответа сервера — то есть ровно тогда, когда ждать
+   уже не надо. Неподвижный ноль хуже отсутствия счётчика: он выглядит как
+   зависшая страница. */
+function lensClock(slot, state) {
+    const started = Date.now();
+
+    function draw() {
+        const seconds = Math.round((Date.now() - started) / 1000);
+        slot.innerHTML = '<div class="gen-wait">' +
+            'Оцениваю модуль по линзам Шелла — <b>' + esc(state) + '</b>, ' +
+            '<span class="lens-clock">' + seconds + ' с</span>.<br>' +
+            'Агент живёт в ФинИгроСкопе и читает модуль целиком; это занимает ' +
+            'до нескольких минут. Страница обновится сама.' +
+        '</div>';
+    }
+
+    draw();
+    const timer = setInterval(draw, 1000);
+
+    return {
+        set: function(next) { state = next; draw(); },
+        stop: function(html) {
+            clearInterval(timer);
+            slot.innerHTML = html;
+        }
+    };
 }
 
-function lensPoll(slot, jobId, started, variantId) {
-    let state = 'queued';
-
-    /* Счётчик тикает отдельно от опроса: опрашивать сервер каждую секунду
-       незачем, а видеть, что время идёт, нужно постоянно. */
-    const clock = setInterval(function() {
-        lensWait(slot, started, LENS_STATE_TEXT[state] || state);
-    }, 1000);
-
+function lensPoll(slot, jobId, clock, variantId) {
     function stop(html) {
-        clearInterval(clock);
-        slot.innerHTML = html;
+        clock.stop(html);
     }
 
     function ask() {
@@ -1432,7 +1450,7 @@ function lensPoll(slot, jobId, started, variantId) {
                 stop(lensHtml(body.result, variantId));
                 return;
             }
-            state = body.status || state;
+            clock.set(LENS_STATE_TEXT[body.status] || body.status || 'идёт');
             setTimeout(ask, 2000);
         }).catch(function(e) {
             stop(genErrorHtml({ error: 'Сервер не ответил: ' + e.message }));

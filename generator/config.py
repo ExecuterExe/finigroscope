@@ -83,6 +83,9 @@ class Config:
         # Линзы отвечают дольше генерации: читают модуль и разбирают его по
         # десяткам линз. Ждём столько же, сколько отведено самому агенту.
         self.lens_timeout = _number("LENS_TIMEOUT", 330, int)
+        # Перезапускать сервер при правке .py. Только для разработки; на сервере
+        # процессом управляет systemd, и второй сторож там лишний.
+        self.autoreload = _text("GENERATOR_AUTORELOAD", "1") not in ("0", "false", "no")
         self.timeout = _number("LLM_TIMEOUT", 60, int)
         self.max_tokens = _number("LLM_MAX_TOKENS", 2000, int)
         self.temperature = _number("LLM_TEMPERATURE", 0.7, float)
