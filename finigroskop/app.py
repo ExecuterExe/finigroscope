@@ -60,9 +60,15 @@ from review import stats_evaluator as stats_agent
 from review import synthesizer as synth_agent
 from simulation import runner as sim_runner
 
-# Секреты (LLM_PROVIDER, GEMINI_API_KEY, ...) читаются из .env в корне проекта —
+# Секреты (LLM_PROVIDER, GEMINI_API_KEY, ...) читаются из .env В ЭТОЙ ПАПКЕ —
 # см. .env.example. Файл .env в git не попадает (см. .gitignore).
-load_dotenv()
+#
+# Путь указан явно, а не поиском вверх по дереву: пустой load_dotenv() берёт
+# первый .env, найденный от app.py и выше. Сегодня это нужный файл, но рядом в
+# экосистеме лежит generator/ со своим .env, где ТЕ ЖЕ имена переменных значат
+# другое (LLM_PROVIDER, LLM_TIMEOUT, имена моделей). Стоит кому-нибудь положить
+# .env в корень экосистемы — и сервис молча заработает на чужих настройках.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Пути и режим запуска — из окружения (см. config.py). Раньше путь к базе был
 # константой, и тестовый прогон работал с тем же файлом, что живой сервер.

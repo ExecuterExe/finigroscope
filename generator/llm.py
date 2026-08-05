@@ -20,6 +20,14 @@ from config import config
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MAX_PROMPT = 20000
 
+# Сколько раз всего пробуем отправить запрос (первый заход плюс повторы).
+# Повторяем только сбои, которые проходят сами собой, — см. _post.
+SEND_ATTEMPTS = 3
+
+# Пауза перед повтором, секунды. Удваивается с каждой попыткой: если провайдер
+# просит подождать (429), долбить его с той же частотой бессмысленно.
+RETRY_PAUSE = 2.0
+
 
 class LLMError(Exception):
     """Запрос к модели не удался. Текст пригоден для показа пользователю."""
@@ -90,17 +98,7 @@ def complete(messages, tier="pro", temperature=None, max_tokens=None,
 
     limit = config.timeout if timeout is None else timeout
     started = time.time()
-    try:
-        with urllib.request.urlopen(request, timeout=limit) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise LLMError(_http_error(e))
-    except urllib.error.URLError as e:
-        raise LLMError("Не удалось связаться с OpenRouter: %s" % e.reason)
-    except json.JSONDecodeError:
-        raise LLMError("OpenRouter вернул не JSON.")
-    except TimeoutError:
-        raise LLMError("OpenRouter не ответил за %d с." % limit)
+    body = _post(request, limit)
 
     # ошибка может прийти и с кодом 200 — в теле ответа
     if isinstance(body.get("error"), dict):
@@ -119,6 +117,45 @@ def complete(messages, tier="pro", temperature=None, max_tokens=None,
         "duration": time.time() - started,
         "finish_reason": choices[0].get("finish_reason"),
     }
+
+
+def _post(request, limit):
+    """Отправляет запрос, повторяя сбои, которые проходят сами собой.
+
+    Зачем это здесь. Единственный обрыв соединения («EOF occurred in violation
+    of protocol») отменял всю генерацию целиком: агент делает до трёх попыток,
+    но только когда модель вернула негодный ответ, — сетевая ошибка вылетала
+    из цикла сразу. Пользователь видел «не удалось связаться» там, где через
+    секунду всё работает.
+
+    Повторяем: обрыв соединения и TLS, 429 (слишком часто) и 5xx (у провайдера).
+    НЕ повторяем:
+      • 401/402/404 и прочие 4xx — ответ будет тот же, ждать незачем;
+      • таймаут — время уже потрачено, а запрос мог дойти и посчитаться:
+        повтор рискует оплатить генерацию дважды.
+    """
+    last_error = None
+
+    for attempt in range(1, SEND_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=limit) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # HTTPError — подкласс URLError, поэтому ловим его первым
+            if e.code != 429 and e.code < 500:
+                raise LLMError(_http_error(e))
+            last_error = _http_error(e)
+        except urllib.error.URLError as e:
+            last_error = "Не удалось связаться с OpenRouter: %s" % e.reason
+        except TimeoutError:
+            raise LLMError("OpenRouter не ответил за %d с." % limit)
+        except json.JSONDecodeError:
+            raise LLMError("OpenRouter вернул не JSON.")
+
+        if attempt < SEND_ATTEMPTS:
+            time.sleep(RETRY_PAUSE * attempt)
+
+    raise LLMError("%s Не помогли %d попытки." % (last_error, SEND_ATTEMPTS))
 
 
 def complete_json(messages, **kwargs):
