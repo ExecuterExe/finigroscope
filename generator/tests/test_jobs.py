@@ -123,3 +123,25 @@ def test_время_работы_считается():
     job_id = jobs.submit(lambda progress: {"ок": True})
     wait(job_id)
     assert jobs.status(job_id)["elapsed"] >= 0
+
+
+def test_время_шага_отдельно_от_общего():
+    """Страница показывает их РАЗНО: общее время рядом с названием шага читалось
+    как «этот шаг висит семь минут», хотя семь минут шёл весь проход."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def работа(progress):
+        time.sleep(0.15)                 # что-то уже сделано до первого шага
+        progress.say("оценка по линзам")
+        started.set()
+        release.wait(5)
+        return {}
+
+    job_id = jobs.submit(работа)
+    assert started.wait(5)
+
+    state = jobs.status(job_id)
+    assert state["step_elapsed"] < state["elapsed"]
+    release.set()
+    wait(job_id)

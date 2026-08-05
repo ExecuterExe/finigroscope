@@ -30,6 +30,7 @@ review/prompts/lenses.md.
 import json
 import os
 import re
+import time
 
 from review import prompts
 from review.llm_provider import get_provider
@@ -79,7 +80,25 @@ SIM_META_FIELDS = ("subjective_actions", "metric_responds_immediately",
 
 # Агент читает много текста (правила целиком + справочник линз в промпте) и
 # отвечает длинным разбором по 47 линзам — короткий таймаут его обрывает.
-LLM_TIMEOUT = 300
+#
+# ДВА срока, а не один, и это не перестраховка. Провайдер перебирает
+# бесплатные модели каскадом, а таймаут раньше применялся к КАЖДОЙ: вызов с
+# 300 с на пяти кандидатах шёл до 25 минут. Плюс сам агент делает второй заход,
+# если ответ не прошёл самопроверку, — ещё столько же. На живом прогоне страница
+# показала ошибку по своему сроку, а перебор в это время продолжался.
+#
+# LLM_TIMEOUT — предел ОДНОЙ попытки к одной модели. Он заметно короче общего
+# бюджета намеренно: иначе первая же зависшая модель съест всё время, и каскад,
+# ради которого он и заведён, ни разу не сработает.
+LLM_TIMEOUT = 120
+
+# TOTAL_BUDGET — предел на ВСЮ оценку: каскад моделей плюс повторный заход.
+# Согласован с ожиданием генератора (generator/config.py, LENS_TIMEOUT): тот
+# обязан быть больше, иначе он сдастся раньше, чем работа закончится.
+TOTAL_BUDGET = 300
+
+# Сколько времени должно остаться, чтобы второй заход имел смысл.
+MIN_RETRY_SECONDS = 45
 
 
 def _issue(code: str, message: str, severity: str = "warning") -> dict:
@@ -658,7 +677,12 @@ def run(data: dict, provider_name: str = None, cache_dir: str = None,
     user = message if message is not None else build_message(data, scope)
 
     provider = get_provider(provider_name, cache_dir=cache_dir)
-    resp = provider.complete(system, user, timeout=LLM_TIMEOUT)
+
+    # Общий срок на всю оценку. Дальше он только уменьшается — и каскад моделей,
+    # и повторный заход укладываются В НЕГО, а не каждый в свой.
+    deadline = time.monotonic() + TOTAL_BUDGET
+
+    resp = provider.complete(system, user, timeout=LLM_TIMEOUT, deadline=deadline)
     if not resp.available:
         return {"available": False, "error": resp.error}
 
@@ -677,12 +701,16 @@ def run(data: dict, provider_name: str = None, cache_dir: str = None,
     RECOMPUTED = ("avg_recomputed",)
     blocking = [i for i in issues
                 if i["severity"] == "error" and i["code"] not in RECOMPUTED]
-    if blocking:
+    # Второй заход — только если на него осталось время. Начинать его за
+    # полминуты до конца бюджета значит гарантированно оборвать на середине:
+    # первый ответ мы при этом уже имеем, и он не хуже оттого, что не исправлен.
+    if blocking and deadline - time.monotonic() > MIN_RETRY_SECONDS:
         lines = [f"• [{i['severity']}] {i['code']}: {i['message']}" for i in blocking]
         retry = (user + "\n\n=== ТВОЙ ПРЕДЫДУЩИЙ ОТВЕТ НЕ ПРОШЁЛ ПРОВЕРКУ ===\n"
                  + "\n".join(lines)
                  + "\n\nИсправь ровно эти нарушения и верни ПОЛНЫЙ JSON заново.")
-        resp2 = provider.complete(system, retry, timeout=LLM_TIMEOUT)
+        resp2 = provider.complete(system, retry, timeout=LLM_TIMEOUT,
+                                  deadline=deadline)
         if resp2.available:
             report2 = _extract_json(resp2.text)
             if report2 is not None:

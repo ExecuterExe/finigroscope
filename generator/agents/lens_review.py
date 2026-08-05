@@ -142,8 +142,30 @@ def evaluate(phase, module, params, audit, wait=None):
     started = submit(phase, module, params, audit)
     if not started.get("ready"):
         return started
-    return _await_result(started["job_id"],
-                         wait if wait is not None else config.lens_timeout)
+    return _await_result(started["job_id"], wait_for(started, wait))
+
+
+# Запас поверх бюджета оценщика: очередь, сеть, разбор ответа.
+WAIT_SLACK = 60
+
+
+def wait_for(started, wait=None):
+    """Сколько ждать ЭТУ оценку.
+
+    Срок берётся у самого оценщика (`budget_seconds` в ответе на заявку), а не
+    из своей константы. Причина простая: две константы в разных сервисах
+    расходятся молча. Сдавшийся раньше времени генератор показывает ошибку по
+    несуществующему поводу, а работа при этом продолжает идти — именно так и
+    выглядел сбой, из-за которого бюджет вообще появился.
+
+    Своё значение остаётся запасным: старый оценщик поля не пришлёт.
+    """
+    if wait is not None:
+        return wait
+    budget = started.get("budget_seconds")
+    if isinstance(budget, (int, float)) and budget > 0:
+        return int(budget) + WAIT_SLACK
+    return config.lens_timeout
 
 
 def _await_result(job_id, wait):

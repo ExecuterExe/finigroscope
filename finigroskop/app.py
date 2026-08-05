@@ -366,7 +366,13 @@ def lens_module_submit():
     job_id = lens_queue.submit(
         lambda: lens_module.evaluate(phase, module, params, audit,
                                      provider_name=provider))
+    # Бюджет отдаём вместе с номером задачи. Он нужен вызывающему, чтобы
+    # соразмерить своё ожидание: генератор, сдавшийся раньше, чем оценщик
+    # закончил, показывает ошибку по несуществующему поводу, а работа при этом
+    # продолжает идти. Заодно по этому полю видно, свежий ли код в памяти
+    # сервера, — а это уже дважды обходилось дорого.
     return jsonify({"ready": True, "job_id": job_id,
+                    "budget_seconds": lens_agent.TOTAL_BUDGET,
                     "status_url": url_for("lens_module_status", job_id=job_id)}), 202
 
 

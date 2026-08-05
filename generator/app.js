@@ -1586,15 +1586,26 @@ function passPoll(pass, jobId, started) {
 }
 
 function pipeWaitHtml(state, started) {
-    const seconds = Math.round((Date.now() - started) / 1000);
+    const whole = Math.round((Date.now() - started) / 1000);
     const total = state.attempts_total || 3;
     const now = state.attempt || 1;
+
+    /* Два времени, а не одно. Рядом с названием шага должно стоять время ЭТОГО
+       шага: общее время там читалось как «линзы висят семь минут», хотя семь
+       минут шёл весь проход, а линзы — минуту из них. Сервер присылает
+       step_elapsed; если его нет (старый сервер) — общее за шаг не выдаём. */
+    const step = state.step_elapsed;
+    const clock = (step === null || step === undefined)
+        ? ''
+        : ' <span class="lens-clock">' + Math.round(step) + ' с</span>';
 
     let html = '<div class="pipe">' +
         '<div class="pipe-head">' +
             '<span class="badge">Попытка ' + esc(now) + ' из ' + esc(total) + '</span>' +
-            '<h3 class="gen-title">' + esc(PIPE_STEP_TEXT[state.step] || state.step) +
-                ' <span class="lens-clock">' + seconds + ' с</span></h3>' +
+            '<h3 class="gen-title">' +
+                esc(PIPE_STEP_TEXT[state.step] || state.step) + clock + '</h3>' +
+            '<p class="gen-note pipe-total">Весь проход идёт ' + whole + ' с. ' +
+                'Предел одного шага — около 6 минут, дольше он не провисит.</p>' +
             (state.detail ? '<p class="gen-note">' + esc(state.detail) + '</p>' : '') +
         '</div>';
 

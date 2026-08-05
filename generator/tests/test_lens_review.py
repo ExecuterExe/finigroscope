@@ -192,6 +192,30 @@ def test_упавшая_оценка_даёт_понятную_ошибку(serv
     assert "TimeoutError" in str(error.value)
 
 
+def test_срок_берётся_у_оценщика_а_не_из_своей_константы(monkeypatch):
+    """Две константы в разных сервисах расходятся молча, и тогда генератор
+    сдаётся раньше, чем оценщик закончил: ошибка есть, а работа идёт."""
+    monkeypatch.setattr(config, "lens_timeout", 999)
+    assert lens_review.wait_for({"budget_seconds": 300}) == 300 + lens_review.WAIT_SLACK
+
+
+def test_без_бюджета_остаётся_своя_константа(monkeypatch):
+    """Старый оценщик поля не пришлёт — ждать всё равно надо."""
+    monkeypatch.setattr(config, "lens_timeout", 360)
+    assert lens_review.wait_for({}) == 360
+
+
+def test_явный_срок_сильнее_всего(monkeypatch):
+    monkeypatch.setattr(config, "lens_timeout", 360)
+    assert lens_review.wait_for({"budget_seconds": 300}, wait=5) == 5
+
+
+def test_мусорный_бюджет_игнорируется(monkeypatch):
+    monkeypatch.setattr(config, "lens_timeout", 360)
+    assert lens_review.wait_for({"budget_seconds": 0}) == 360
+    assert lens_review.wait_for({"budget_seconds": "много"}) == 360
+
+
 def test_ожидание_ограничено(server):
     """Иначе вкладка висела бы вечно на задаче, которая уже никогда не ответит."""
     server({"ready": True, "job_id": "abc"}, {"status": "running"})

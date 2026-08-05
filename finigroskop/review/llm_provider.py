@@ -39,9 +39,14 @@ import abc
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass
 
 DEFAULT_TIMEOUT = 25
+
+# Меньше этого запускать новую попытку бессмысленно: модель не успеет даже
+# прочитать запрос, а время потратится и на неё, и на разбор её обрыва.
+_MIN_ATTEMPT_SECONDS = 15
 DEFAULT_TEMPERATURE = 0.3
 
 
@@ -311,10 +316,33 @@ class OpenAICompatProvider(LLMProvider):
 
         candidates = [self.model] if self.model_explicit else list(
             self.FALLBACK_MODELS or [self.model])
-        errors = []
+
+        # ОБЩИЙ бюджет времени на весь каскад. Без него таймаут применялся к
+        # КАЖДОЙ модели по отдельности, и вызов с timeout=300 на пяти кандидатах
+        # мог идти 25 минут. Обнаружено на живом прогоне: страница показала
+        # ошибку по своему сроку, а перебор в это время продолжался.
+        #
+        # Смысл каскада — пережить перегрузку одной модели, а не перебрать все
+        # любой ценой. Цена времени тут выше цены полноты перебора.
+        deadline = opts.pop("deadline", None)
+        per_model = self._timeout(opts)      # снимаем ОДИН раз: иначе на второй
+        errors = []                          # итерации читался бы уже урезанный
+        tried = 0
+
         for model in candidates:
+            attempt_opts = opts
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= _MIN_ATTEMPT_SECONDS:
+                    errors.append(
+                        f"на остальных кандидатов ({len(candidates) - tried}) "
+                        f"времени не осталось")
+                    break
+                attempt_opts = dict(opts, timeout=min(per_model, int(left)))
+
+            tried += 1
             try:
-                text = self._call_model(model, system, user, **opts)
+                text = self._call_model(model, system, user, **attempt_opts)
                 self.model = model  # что реально ответило — видно в отчёте/кэше
                 return text
             except _RetryableModelError as exc:
@@ -322,7 +350,8 @@ class OpenAICompatProvider(LLMProvider):
                 continue
 
         raise RuntimeError(
-            f"Все модели-кандидаты сейчас недоступны/перегружены: "
+            f"Все модели-кандидаты сейчас недоступны/перегружены "
+            f"(перепробовано {tried} из {len(candidates)}): "
             f"{'; '.join(errors)}.{self.LIST_MODELS_HINT}"
         )
 

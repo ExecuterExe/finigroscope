@@ -168,6 +168,11 @@ def status(job_id):
             "attempts_total": record["attempts_total"],
             "attempts": list(record["attempts"]),
             "elapsed": round(time.time() - record["created_at"], 1),
+            # Время ТЕКУЩЕГО шага отдельно от общего. Без него страница
+            # показывала общее время рядом с названием шага, и «оценка по
+            # линзам 436 с» читалось как «линзы висят семь минут», хотя семь
+            # минут шёл весь проход, а линзы — минуту из них.
+            "step_elapsed": round(time.time() - record["step_started"], 1),
             "error": record["error"],
         }
         if record["status"] == DONE:
