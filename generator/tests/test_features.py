@@ -465,25 +465,49 @@ def test_годная_заявка_не_ловится_как_названное
     assert problems_of(data, p=params(**COMPONENTS_PARAMS)) == []
 
 
-def test_компонент_вне_выбора_автора_отвергается():
-    """Ввести новый тип предмета модуль не вправе: автор его не заказывал."""
+def warnings_of(data, **kwargs):
+    return check(data, **kwargs)[1]
+
+
+@pytest.mark.parametrize("заявка,кусок", [
+    ({"component": "фигурки", "count": 3, "why": "зачем"}, "нет в ответах автора"),
+    ({"component": "жетоны", "count": "пять", "why": "зачем"}, "положительным"),
+    ({"component": "жетоны", "count": 0, "why": "зачем"}, "положительным"),
+    ({"component": "жетоны", "count": 999, "why": "зачем"}, "больше предела"),
+    ({"component": "жетоны", "count": 3, "why": "  "}, "зачем"),
+])
+def test_негодная_заявка_это_замечание_а_не_брак(заявка, кусок):
+    """Необязательное поле не вправе убить годный модуль.
+
+    Проблема означает «собрать заново» — три платных вызова и минуты ожидания.
+    Модуль без заявки полноценен, а с испорченной — полноценен ровно настолько
+    же, только без одной добавки. Гонять из-за неё перегенерацию несоразмерно.
+    """
+    data = трио({components.EXTRA_FIELD: [заявка]})
+    p = params(**COMPONENTS_PARAMS)
+
+    assert problems_of(data, p=p) == [], "модуль забраковали из-за добавки"
+    assert any(кусок in w for w in warnings_of(data, p=p)), "замечание не показано"
+
+
+def test_замечание_говорит_что_заявка_не_учтена():
+    """Иначе автор решит, что предметы поедут в коробку, а их там не будет."""
     data = трио(просит("фигурки", 3))
-    problems = problems_of(data, p=params(**COMPONENTS_PARAMS))
-    assert any("нет в ответах автора" in p for p in problems)
+    assert any("не учтена" in w for w in warnings_of(data, p=params(**COMPONENTS_PARAMS)))
 
 
-def test_заявка_без_причины_отвергается():
-    data = трио(просит("жетоны", 3, why=""))
-    assert any("зачем" in p for p in problems_of(data, p=params(**COMPONENTS_PARAMS)))
-
-
-def test_нецелое_количество_отвергается():
-    data = трио(просит("жетоны", "пять"))
-    assert any("положительным" in p
+def test_сломанное_поле_это_всё_же_брак():
+    """Не список — признак сломанного ответа, а не неудачной заявки."""
+    data = трио({components.EXTRA_FIELD: "четыре жетона"})
+    assert any("должно быть списком" in p
                for p in problems_of(data, p=params(**COMPONENTS_PARAMS)))
 
 
-def test_запредельное_количество_отвергается():
-    data = трио(просит("жетоны", components.MAX_EXTRA_COUNT + 1))
-    assert any("больше предела" in p
-               for p in problems_of(data, p=params(**COMPONENTS_PARAMS)))
+def test_агент_видит_список_выбранных_компонентов():
+    """Без него модель может только угадывать, и все три попытки бракуются —
+    ровно так генерация особенностей и перестала работать."""
+    p = params(**COMPONENTS_PARAMS)
+    assert "components" in features.features_params(p)
+    message = features.build_user_message(
+        p, MECHANICS, STORY, features.for_prompt(features.filter_library(p)[0]))
+    assert "жетоны" in message

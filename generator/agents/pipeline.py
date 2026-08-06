@@ -474,10 +474,49 @@ def _passed_without_score(attempt, variant, audit, reason):
 
 
 def _short(row):
-    """Строка для показа хода работы — без тяжёлых вложенных отчётов."""
-    return {k: row.get(k) for k in
-            ("attempt", "ok", "stage", "variant_id", "title", "score", "passed",
-             "reason", "weight_covered", "unscored_reason")}
+    """Строка попытки для показа — без тяжёлых вложенных отчётов.
+
+    `problems` здесь ОБЯЗАТЕЛЬНЫ, хотя это и список. Причины провала уже
+    вычислены — их вернул валидатор агента или аудитор, — и выбрасывать их
+    ровно перед показом значит оставить автора со строкой «модель не собрала
+    годный вариант», по которой нельзя понять ни что чинить, ни виноват ли он
+    сам. Ровно на это и жаловались: три попытки, три одинаковых слова, ноль
+    сведений.
+
+    Списки не тяжёлые: это несколько строк текста на попытку, а не отчёты
+    аудитора и линз целиком — те остаются в полной строке и на экран не едут.
+    """
+    short = {k: row.get(k) for k in
+             ("attempt", "ok", "stage", "variant_id", "title", "score", "passed",
+              "reason", "weight_covered", "unscored_reason")}
+    short["problems"] = list(row.get("problems") or [])
+
+    # У попытки, дошедшей до оценки, «почему не прошло» — это находки линз и
+    # замечания аудитора, а не список проблем генерации.
+    lens = row.get("lens") or {}
+    if lens:
+        score = lens.get("score") or {}
+        short["lens_findings"] = [
+            {"lens": f.get("lens"), "severity": f.get("severity"),
+             "detail": f.get("detail") or f.get("text") or ""}
+            for f in ((lens.get("report") or {}).get("findings") or [])
+        ]
+        short["weight_covered"] = score.get("weight_covered")
+
+    audit = row.get("audit") or {}
+    if audit:
+        short["audit_issues"] = [
+            {"item": i.get("checklist_item"), "severity": i.get("severity"),
+             "explanation": i.get("explanation") or ""}
+            for i in (audit.get("issues") or [])
+        ]
+        short["audit_violations"] = [
+            {"item": r.get("item"), "note": r.get("note") or ""}
+            for r in (audit.get("map") or [])
+            if r.get("status") == module_auditor.STATUS_VIOLATION
+        ]
+
+    return short
 
 
 def _finish(phase, tried, warnings, attempts, scored, skip_reason, built_on=None):
@@ -545,8 +584,26 @@ def _finish_unscored(phase, tried, warnings, attempts, skip_reason, built_on=Non
 
 
 def _no_result_message(tried, attempts, what):
-    return ("Ни одна из %d попыток %s. Причины: %s"
+    """Текст отказа с КОНКРЕТНЫМИ причинами, а не с общими словами.
+
+    Раньше здесь было только `reason` — одна и та же строка «модель не собрала
+    годный вариант» три раза подряд. Она верна и совершенно бесполезна: по ней
+    не понять ни что не так с ответами опросника, ни что чинить в библиотеке.
+    Подробности лежали рядом, в problems, и до автора не доезжали.
+    """
+    lines = []
+    for row in tried:
+        line = "попытка %d — %s (%s)" % (
+            row["attempt"], row.get("reason", "?"), row.get("stage", "?"))
+        problems = row.get("problems") or []
+        if problems:
+            # Три-четыре первых: полный список бывает длинным, а первые причины
+            # обычно и есть настоящие — остальное часто их следствия.
+            line += ": " + "; ".join(str(p) for p in problems[:4])
+            if len(problems) > 4:
+                line += " и ещё %d" % (len(problems) - 4)
+        lines.append(line)
+
+    return ("Ни одна из %d попыток %s.\n%s"
             % (len(tried) or attempts, what,
-               "; ".join("попытка %d — %s (%s)"
-                         % (r["attempt"], r.get("reason", "?"), r.get("stage", "?"))
-                         for r in tried) or "неизвестны"))
+               "\n".join(lines) or "Причины неизвестны."))

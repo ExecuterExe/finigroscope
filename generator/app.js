@@ -1771,6 +1771,57 @@ function pipeWaitHtml(state, started, cancellable) {
     return html;
 }
 
+/* Разбор одной попытки: почему она не прошла. Раскрывается по клику — в
+   таблице этому места нет, а без этого «сорвалась на этапе генерации» остаётся
+   единственным, что автор узнаёт о трёх потраченных вызовах. */
+function attemptDetailsHtml(r) {
+    const blocks = [];
+
+    if ((r.problems || []).length) {
+        blocks.push('<div class="attempt-block">' +
+            '<b>Что не приняла проверка</b><ul>' +
+            r.problems.map(function(p) {
+                return '<li>' + esc(p) + '</li>';
+            }).join('') + '</ul></div>');
+    }
+
+    if ((r.audit_violations || []).length) {
+        blocks.push('<div class="attempt-block">' +
+            '<b>Нарушения чек-листа аудитора</b><ul>' +
+            r.audit_violations.map(function(v) {
+                return '<li><b>' + esc(v.item) + '</b>' +
+                    (v.note ? ' — ' + esc(v.note) : '') + '</li>';
+            }).join('') + '</ul></div>');
+    }
+
+    if ((r.audit_issues || []).length) {
+        blocks.push('<div class="attempt-block">' +
+            '<b>Находки аудитора</b><ul>' +
+            r.audit_issues.map(function(i) {
+                return '<li><span class="sev sev-' + esc(i.severity) + '">' +
+                    esc(i.severity === 'critical' ? 'критично' : 'некритично') +
+                    '</span> <b>' + esc(i.item) + '</b> — ' +
+                    esc(i.explanation) + '</li>';
+            }).join('') + '</ul></div>');
+    }
+
+    if ((r.lens_findings || []).length) {
+        blocks.push('<div class="attempt-block">' +
+            '<b>Находки по линзам</b><ul>' +
+            r.lens_findings.map(function(f) {
+                return '<li>' + (f.lens ? '<b>Линза ' + esc(f.lens) + '</b> — ' : '') +
+                    esc(f.detail) + '</li>';
+            }).join('') + '</ul></div>');
+    }
+
+    if (!blocks.length) {
+        blocks.push('<div class="attempt-block">Подробностей по этой попытке ' +
+            'сервер не прислал.</div>');
+    }
+
+    return blocks.join('');
+}
+
 function pipeAttemptsTable(rows) {
     return '<table class="lens-table pipe-table"><thead><tr>' +
         '<th>Попытка</th><th>Итог</th><th>Балл</th></tr></thead><tbody>' +
@@ -1779,12 +1830,28 @@ function pipeAttemptsTable(rows) {
                 ? esc(r.title || 'модуль собран')
                 : '<i>сорвалась на этапе «' + esc(r.stage) + '»: ' +
                   esc(r.reason || '') + '</i>';
-            const mark = (r.score === null || r.score === undefined)
-                ? '—'
-                : '<b class="' + (r.passed ? 'pipe-ok' : 'pipe-low') + '">' +
-                  esc(r.score) + '</b>';
-            return '<tr><td>' + esc(r.attempt) + '</td><td>' + outcome +
-                '</td><td>' + mark + '</td></tr>';
+
+            /* Балл показываем ВСЕГДА, когда он есть, — и у непрошедшей попытки
+               тоже. Прочерк там, где балл был посчитан, скрывает главное:
+               насколько именно не дотянули. */
+            let mark;
+            if (r.score === null || r.score === undefined) {
+                mark = '<span class="comp-dim" title="' +
+                    esc(r.ok ? 'этот модуль оценивается без балла'
+                             : 'попытка не дошла до оценки') + '">—</span>';
+            } else {
+                mark = '<b class="' + (r.passed ? 'pipe-ok' : 'pipe-low') + '">' +
+                    esc(r.score) + '</b>';
+            }
+
+            const details = attemptDetailsHtml(r);
+            const rowspan = ' rowspan="2"';
+
+            return '<tr class="attempt-row"><td' + rowspan + '>' + esc(r.attempt) +
+                '</td><td>' + outcome + '</td><td' + rowspan + '>' + mark + '</td></tr>' +
+                '<tr class="attempt-more"><td><details>' +
+                    '<summary>Почему' + (r.ok ? ' такой балл' : ' не прошло') +
+                    '</summary>' + details + '</details></td></tr>';
         }).join('') + '</tbody></table>';
 }
 
@@ -2443,7 +2510,7 @@ function storyCardHtml(variant) {
         html += '<div class="story-field">' +
             '<span class="story-label">Артефакты</span>' +
             '<p class="story-hint">Сколько их и из чего они — посчитает ' +
-                'программа на этапе 5. Здесь только имена и роль в истории.</p>' +
+                'программа по таблицам. Здесь только имена и роль в истории.</p>' +
             '<ul class="story-list">' +
             variant.artifacts.map(function(a) {
                 return '<li><b>' + esc(a.name || '') + '</b> ' +
@@ -2576,16 +2643,21 @@ function componentsHtml(body) {
 
     let html = '<div class="pipe">' +
         '<div class="pipe-head">' +
-            '<span class="badge success">Этап 5</span>' +
+            /* Раньше здесь стояло «Этап 5» — номер из ТЗ, которого автор не
+               читал. Рядом с «Собрать сюжет» и «Собрать особенности» он читался
+               как пропущенный шаг: где тогда этапы 3 и 4? Пишем, ЧТО это, а не
+               какой у него номер во внутреннем документе. */
+            '<span class="badge success">Что войдёт в коробку</span>' +
             '<h3 class="gen-title">' +
-                (final ? 'Компоненты: количество и материал'
-                       : 'Компоненты: базовое количество') + '</h3>' +
+                (final ? 'Компоненты: сколько и из чего'
+                       : 'Компоненты: предварительный расчёт') + '</h3>' +
             '<p class="gen-note">' + (final
-                ? 'Пересчёт после особенностей. Материал выбран из разрешённых ' +
-                  'книгой с учётом возраста и места игры.'
-                : 'Числа для симуляции: столько нужно, чтобы игровой цикл ' +
-                  'работал. Материал определяется позже — после особенностей, ' +
-                  'когда станут известны адаптация и антураж.') +
+                ? 'Окончательный расчёт: учтены заявки сюжета и особенностей, ' +
+                  'материал выбран с учётом возраста и места игры.'
+                : 'Предварительный расчёт по игровому циклу — столько нужно, ' +
+                  'чтобы он работал. Числа могут вырасти: сюжет и особенности ' +
+                  'вправе попросить добавку. Материал выбирается в конце, когда ' +
+                  'станут известны адаптация и антураж.') +
                 ' Считает код по таблицам, модель не вызывается.</p>' +
         '</div>';
 

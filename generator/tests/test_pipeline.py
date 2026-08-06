@@ -639,3 +639,87 @@ def test_итоги_попыток_видны_до_конца_прохода(mon
     # в ход работы уходит краткая строка, без тяжёлых вложенных отчётов
     assert "lens" not in progress.attempts[0]
     assert "variant" not in progress.attempts[0]
+
+
+# --------------------------------------------------------------------------
+# Почему попытка не прошла: причины обязаны доезжать до экрана
+# --------------------------------------------------------------------------
+
+def test_причины_провала_генерации_не_теряются(monkeypatch):
+    """Валидатор их уже вычислил. Выбросить их перед самым показом значит
+    оставить автора со строкой «модель не собрала годный вариант» — по ней
+    нельзя понять ни что чинить, ни виноват ли он сам."""
+    плохо = {"ok": False, "problems": ["вариант 1: приём FEAT_X не из библиотеки",
+                                       "вариант 2: пустая концепция"]}
+    Fakes(monkeypatch, [плохо], [audit()], [lens(7.0)])
+
+    with pytest.raises(pipeline.PipelineError) as error:
+        pipeline.run(PARAMS, Progress())
+
+    текст = str(error.value)
+    assert "не из библиотеки" in текст
+    assert "пустая концепция" in текст
+
+
+def test_разбор_попытки_уходит_на_экран(monkeypatch):
+    """Строка попытки должна нести и причины, и находки — по ним открывается
+    разбор, а не только слово «сорвалась»."""
+    плохо = {"ok": False, "problems": ["вариант 1: нет условия победы"]}
+    Fakes(monkeypatch, [плохо, generation(2)], [audit()], [lens(7.0)])
+
+    out = pipeline.run(PARAMS, Progress())
+    первая = out["attempts"][0]
+
+    assert первая["problems"] == ["вариант 1: нет условия победы"]
+
+
+def test_балл_непрошедшей_попытки_виден(monkeypatch):
+    """Прочерк там, где балл посчитан, скрывает главное — насколько не дотянули."""
+    Fakes(monkeypatch,
+          [generation(1), generation(2)], [audit()], [lens(4.2), lens(7.0)])
+
+    out = pipeline.run(PARAMS, Progress())
+    непрошедшая = out["attempts"][0]
+
+    assert непрошедшая["score"] == 4.2
+    assert непрошедшая["passed"] is False
+
+
+def test_находки_линз_видны_в_строке_попытки(monkeypatch):
+    """«Почему такой балл» — это находки, а не само число."""
+    низкий = lens(4.0)
+    низкий["report"] = {"findings": [
+        {"lens": 34, "severity": "major", "detail": "нет случайности"}]}
+    Fakes(monkeypatch, [generation(1)], [audit()], [низкий])
+
+    out = pipeline.run(PARAMS, Progress())
+    строка = out["attempts"][0]
+
+    assert строка["lens_findings"][0]["lens"] == 34
+    assert "нет случайности" in строка["lens_findings"][0]["detail"]
+
+
+def test_нарушения_аудитора_видны_в_строке_попытки(monkeypatch):
+    Fakes(monkeypatch,
+          [generation(1), generation(2)],
+          [audit(clean=False), audit(clean=True)],
+          [lens(7.0)])
+
+    out = pipeline.run(PARAMS, Progress())
+    сорвалась = out["attempts"][0]
+
+    assert сорвалась["audit_violations"]
+    assert сорвалась["audit_violations"][0]["item"] == "elimination_respected"
+
+
+def test_тяжёлые_отчёты_на_экран_не_едут(monkeypatch):
+    """Разбор аудита и линз целиком остаётся в полной строке: в браузер он
+    уехал бы третьим экземпляром одного и того же."""
+    Fakes(monkeypatch, [generation(1)], [audit()], [lens(7.0)])
+
+    out = pipeline.run(PARAMS, Progress())
+    строка = out["attempts"][0]
+
+    assert "variant" not in строка
+    assert "audit" not in строка
+    assert "lens" not in строка

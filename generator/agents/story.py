@@ -201,14 +201,7 @@ SYSTEM_PROMPT = """# РОЛЬ
          "name": "как он называется в игре",
          "role": "чем является по сюжету"}
       ],
-      "extra_components": [
-        {
-          "component": "название из списка выбранных автором, точно как там",
-          "count": 4,
-          "per_player": false,
-          "why": "под какой сюжетный предмет и зачем именно столько"
-        }
-      ],
+      "extra_components": [],
       "fit_rationale": "почему этот сюжет подходит под механики, мир и возраст",
       "risks": ["что может не сработать в этом сюжете"]
     }
@@ -228,18 +221,21 @@ SYSTEM_PROMPT = """# РОЛЬ
   }
 }
 
-Про `extra_components`. Базовый комплект уже посчитан по таблицам, и трогать его
-нельзя. Но сюжетный предмет иногда требует ДОПОЛНИТЕЛЬНЫХ вещей сверх базового
-набора — отдельной колоды писем, горсти жетонов улик. Такие добавки просят
-ЗДЕСЬ, списком, и никак иначе.
+Про `extra_components`. По умолчанию — ПУСТОЙ СПИСОК, как в схеме выше, и это
+правильный ответ в подавляющем большинстве случаев. Базовый комплект уже
+посчитан по таблицам.
 
-  - `component` — только из тех, что автор выбрал в опроснике. Ввести новый тип
-    предмета нельзя: автор его не заказывал.
+Заполняй его, ТОЛЬКО если сюжетный предмет физически не работает без вещей
+сверх базового набора — например требует отдельной колоды писем. Если всё же
+заполняешь, элемент выглядит так:
+
+  {"component": "...", "count": 4, "per_player": false, "why": "..."}
+
+  - `component` — ДОСЛОВНО одно из значений `components` в параметрах игры выше.
+    Не синоним, не своё название, не новый тип: автор его не заказывал.
   - `count` — целое положительное, в разумных пределах. При `per_player: true`
     это количество НА ОДНОГО игрока; на число игроков программа умножит сама.
-  - `why` — обязательно: без причины число нечем оспорить, и заявка отклоняется.
-
-Пустой список — нормальный и самый частый ответ.
+  - `why` — обязательно, иначе заявка не будет учтена.
 
 Это единственное место, где сюжету разрешено называть количества. В описаниях
 артефактов чисел по-прежнему быть не должно — за это отвечает
@@ -410,7 +406,12 @@ MECHANICS_KEYS = ("title", "core_mechanics", "game_loop", "win_condition",
                   "required_component_types")
 
 STORY_PARAM_KEYS = ("story", "world", "genre", "age_group", "purpose",
-                    "location", "play_time", "interaction", "custom")
+                    "location", "play_time", "interaction",
+                    # components — для заявок на дополнительные предметы:
+                    # называть в них разрешено только выбранное автором, и не
+                    # видя списка, модель может лишь угадывать.
+                    "components",
+                    "custom")
 
 
 def story_params(params):
@@ -623,7 +624,10 @@ def validate(data, seeds, params, mechanics_module, mode=MODE_STRICT):
             if field not in variant:
                 problems.append("%s: нет поля %s." % (label, field))
 
-        problems.extend(checks.extra_components_problems(variant, params, label))
+        extra_problems, extra_warnings = checks.extra_components_issues(
+            variant, params, label)
+        problems.extend(extra_problems)
+        warnings.extend(extra_warnings)
 
         ids_seen.append(variant.get("variant_id"))
         seeds_seen.append(variant.get(SEED_FIELD))

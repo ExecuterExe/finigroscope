@@ -817,6 +817,40 @@ body.nav-open {
     font-size: 12px;
 }
 
+/* Разбор попытки: свёрнут по умолчанию, чтобы таблица оставалась таблицей,
+   но доступен по клику — иначе о трёх потраченных вызовах автор узнаёт одну
+   строку «сорвалась на этапе генерации». */
+.attempt-more > td {
+    padding-top: 0;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.attempt-more summary {
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
+.attempt-block {
+    margin: 8px 0 4px;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.attempt-block b {
+    color: var(--text);
+}
+
+.attempt-block ul {
+    margin: 4px 0 0;
+    padding-left: 18px;
+    color: var(--text-dim);
+}
+
+.attempt-block li {
+    margin-bottom: 4px;
+}
+
 .pipe-ok { color: var(--accent); }
 .pipe-low { color: #f8b26a; }
 
