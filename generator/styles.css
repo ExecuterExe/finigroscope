@@ -820,6 +820,37 @@ body.nav-open {
 /* Разбор попытки: свёрнут по умолчанию, чтобы таблица оставалась таблицей,
    но доступен по клику — иначе о трёх потраченных вызовах автор узнаёт одну
    строку «сорвалась на этапе генерации». */
+/* Строка попытки целиком отзывается на наведение: строк три, и попасть в
+   маленькую подпись «почему не прошло» мышью труднее, чем кажется. */
+.pipe-table tbody tr {
+    transition: background 0.15s ease;
+}
+
+.pipe-table tbody tr.attempt-row:hover,
+.pipe-table tbody tr.attempt-row:hover + tr.attempt-more {
+    background: rgba(52, 211, 153, 0.05);
+}
+
+.attempt-more summary::marker { color: var(--accent); }
+
+.attempt-more summary:hover { color: var(--text); }
+
+/* Раскрытая попытка отделяется полосой слева: иначе на трёх раскрытых сразу
+   непонятно, где кончается одна и начинается следующая. */
+.attempt-more details[open] {
+    padding-left: 10px;
+    border-left: 2px solid rgba(52, 211, 153, 0.35);
+}
+
+/* Карточка модуля внутри разбора попытки: она уже оформлена как карточка, и
+   вторая рамка вокруг неё превращает разбор в матрёшку. */
+.attempt-block .story-card {
+    margin-top: 8px;
+    padding: 0;
+    background: none;
+    border: none;
+}
+
 .attempt-more > td {
     padding-top: 0;
     border-bottom: 1px solid var(--card-border);

@@ -348,12 +348,14 @@ def _run_module(phase, step_label, step_detail, generate, fatal, params,
                 attempt, "генерация",
                 "модель не собрала годный вариант",
                 problems=generated.get("problems")))
+            tried[-1]["phase"] = phase
             continue
 
         variant = _pick_variant(generated)
         if variant is None:
             tried.append(_failed_attempt(attempt, "генерация",
                                          "в ответе нет вариантов"))
+            tried[-1]["phase"] = phase
             continue
 
         progress.check_cancelled()
@@ -366,6 +368,7 @@ def _run_module(phase, step_label, step_detail, generate, fatal, params,
                 previous_modules=previous_modules).to_dict()
         except module_auditor.AuditError as error:
             tried.append(_failed_attempt(attempt, "аудит", str(error)))
+            tried[-1]["phase"] = phase
             continue
 
         violations, critical = _blocking(audit)
@@ -376,13 +379,15 @@ def _run_module(phase, step_label, step_detail, generate, fatal, params,
                 attempt, "аудит",
                 "критичные замечания: " + ", ".join(n for n in names if n),
                 variant=variant, audit=audit))
-            progress.add_attempt(tried[-1])
+            tried[-1]["phase"] = phase
+            progress.add_attempt(_short(tried[-1]))
             continue
 
         if not scored:
             # Аудит чистый, а оценивать нечего. Это законный успех прохода, а не
             # его усечённая версия: результат принят, просто балла у него нет.
             row = _passed_without_score(attempt, variant, audit, skip_reason)
+            row["phase"] = phase
             tried.append(row)
             progress.add_attempt(_short(row))
             break
@@ -399,7 +404,8 @@ def _run_module(phase, step_label, step_detail, generate, fatal, params,
             tried.append(_failed_attempt(attempt, "линзы",
                                          lens.get("reason") or "оценка не выполнена",
                                          variant=variant, audit=audit))
-            progress.add_attempt(tried[-1])
+            tried[-1]["phase"] = phase
+            progress.add_attempt(_short(tried[-1]))
             continue
         if not lens.get("available"):
             raise PipelineError(lens.get("error") or "Модель не ответила.")
@@ -422,6 +428,7 @@ def _run_module(phase, step_label, step_detail, generate, fatal, params,
             "audit": audit,
             "lens": lens,
         }
+        row["phase"] = phase
         tried.append(row)
         progress.add_attempt(_short(row))
 
@@ -499,8 +506,20 @@ def _short(row):
     """
     short = {k: row.get(k) for k in
              ("attempt", "ok", "stage", "variant_id", "title", "score", "passed",
-              "reason", "weight_covered", "unscored_reason")}
+              "reason", "weight_covered", "unscored_reason", "phase")}
     short["problems"] = list(row.get("problems") or [])
+
+    # САМ МОДУЛЬ непрошедшей попытки тоже едет на экран. Сперва его отсюда
+    # вычищали заодно с тяжёлыми отчётами — и зря: причина провала объясняет,
+    # ЧТО не так, но не показывает, что именно получилось. Сравнить, чем
+    # попытка 1 отличалась от попытки 2, без этого нельзя, а это первое, что
+    # хочется сделать, увидев три разных балла.
+    #
+    # Он не тяжёлый: это тот же вариант, который у лучшей попытки и так уходит
+    # целиком. Тяжёлые — отчёты аудитора и линз, и они по-прежнему остаются на
+    # сервере: наружу идут только их выжимки (audit_issues, lens_findings).
+    if row.get("variant"):
+        short["variant"] = row["variant"]
 
     # У попытки, дошедшей до оценки, «почему не прошло» — это находки линз и
     # замечания аудитора, а не список проблем генерации.

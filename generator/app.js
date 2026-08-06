@@ -1885,7 +1885,7 @@ function pipeWaitHtml(state, started, cancellable) {
     /* Итоги прошлых попыток показываем ПО ХОДУ. Иначе при трёх попытках пять
        минут не на что смотреть, а результат первой уже известен. */
     if ((state.attempts || []).length) {
-        html += pipeAttemptsTable(state.attempts);
+        html += pipeAttemptsTable(state.attempts, state.phase);
     }
 
     /* Кнопки отмены нет там, где отменять нечего: работа идёт в соседнем
@@ -1909,8 +1909,30 @@ function pipeWaitHtml(state, started, cancellable) {
 /* Разбор одной попытки: почему она не прошла. Раскрывается по клику — в
    таблице этому места нет, а без этого «сорвалась на этапе генерации» остаётся
    единственным, что автор узнаёт о трёх потраченных вызовах. */
-function attemptDetailsHtml(r) {
+/* Какой карточкой показывать модуль попытки. Ключ — фаза прохода: у каждого
+   этапа своя структура разделов по Приложению А, и рисовать сюжет карточкой
+   механик значит не показать ни того, ни другого. */
+const PHASE_CARDS = {
+    mechanics: function(v) { return mechanicsCardHtml(v); },
+    story:     function(v) { return storyCardHtml(v); },
+    features:  function(v) { return featuresCardHtml(v); },
+    rules:     function(v) { return rulesCardHtml(v); }
+};
+
+function attemptDetailsHtml(r, phase) {
     const blocks = [];
+
+    /* Сам модуль — ПЕРВЫМ. Причина провала объясняет, что не так, но не
+       показывает, что получилось; сравнить попытки между собой без этого
+       нельзя, а это первое, что хочется сделать, увидев три разных балла. */
+    const card = PHASE_CARDS[phase];
+    if (card && r.variant) {
+        const drawn = card(r.variant);
+        if (drawn) {
+            blocks.push('<div class="attempt-block">' +
+                '<b>Что получилось в этой попытке</b>' + drawn + '</div>');
+        }
+    }
 
     if ((r.problems || []).length) {
         blocks.push('<div class="attempt-block">' +
@@ -1957,7 +1979,7 @@ function attemptDetailsHtml(r) {
     return blocks.join('');
 }
 
-function pipeAttemptsTable(rows) {
+function pipeAttemptsTable(rows, phase) {
     return '<table class="lens-table pipe-table"><thead><tr>' +
         '<th>Попытка</th><th>Итог</th><th>Балл</th></tr></thead><tbody>' +
         rows.map(function(r) {
@@ -1979,14 +2001,21 @@ function pipeAttemptsTable(rows) {
                     esc(r.score) + '</b>';
             }
 
-            const details = attemptDetailsHtml(r);
+            const details = attemptDetailsHtml(r, phase);
             const rowspan = ' rowspan="2"';
+
+            /* Подпись говорит, что внутри, а не «подробности». Модуль там
+               теперь есть у КАЖДОЙ попытки, дошедшей до генерации, — и у
+               непрошедшей это главное, ради чего её открывают. */
+            const summary = r.variant
+                ? (r.ok ? 'Модуль и почему такой балл' : 'Модуль и почему не прошло')
+                : (r.ok ? 'Почему такой балл' : 'Почему не прошло');
 
             return '<tr class="attempt-row"><td' + rowspan + '>' + esc(r.attempt) +
                 '</td><td>' + outcome + '</td><td' + rowspan + '>' + mark + '</td></tr>' +
                 '<tr class="attempt-more"><td><details>' +
-                    '<summary>Почему' + (r.ok ? ' такой балл' : ' не прошло') +
-                    '</summary>' + details + '</details></td></tr>';
+                    '<summary>' + summary + '</summary>' + details +
+                '</details></td></tr>';
         }).join('') + '</tbody></table>';
 }
 
@@ -2020,7 +2049,7 @@ function pipelineHtml(result) {
        про него, а не вместо него. */
     html += mechanicsCardHtml(best.variant || {});
 
-    html += pipeAttemptsTable(result.attempts || []);
+    html += pipeAttemptsTable(result.attempts || [], result.phase || 'mechanics');
 
     /* Дальше — тот же разбор, что и при ручном проходе: аудит и линзы лучшей
        попытки целиком. Показывать один балл и прятать, из чего он сложился,
@@ -2077,7 +2106,7 @@ function storyHtml(result) {
     html += builtOnHtml(result.built_on);
     html += otherWarningsHtml(result);
     html += storyCardHtml(best.variant || {});
-    html += pipeAttemptsTable(result.attempts || []);
+    html += pipeAttemptsTable(result.attempts || [], 'story');
     html += bestAttemptHtml(best);
 
     /* Переход к этапу 4. Как и на предыдущем шаге: у принятого модуля это
@@ -2117,7 +2146,7 @@ function featuresHtml(result) {
     html += builtOnHtml(result.built_on);
     html += otherWarningsHtml(result);
     html += featuresCardHtml(best.variant || {});
-    html += pipeAttemptsTable(result.attempts || []);
+    html += pipeAttemptsTable(result.attempts || [], 'features');
     html += bestAttemptHtml(best);
 
     /* Переход к этапу 6. Компоненты (этап 5) считает код, отдельной кнопки им
@@ -2156,7 +2185,7 @@ function rulesHtml(result) {
     html += builtOnHtml(result.built_on);
     html += otherWarningsHtml(result);
     html += rulesCardHtml(best.variant || {});
-    html += pipeAttemptsTable(result.attempts || []);
+    html += pipeAttemptsTable(result.attempts || [], 'rules');
     html += bestAttemptHtml(best);
 
     html += nextStageHtml('packageBtn', result.passed,
