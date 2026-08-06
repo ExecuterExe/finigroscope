@@ -381,8 +381,14 @@ class Handler(BaseHTTPRequestHandler):
         # цепочки и номера задачи у них нет: считаем прямо здесь, из тех же
         # ответов опросника. Второй проход («final») — потому что правилам нужны
         # и количества, и материалы, а материал появляется только в нём.
+        modules = {link["phase"]: link["module"] for link in chain}
+
         try:
-            computed = components_agent.final(params)
+            # Модули отдаём расчёту: сюжет и особенности могли попросить
+            # дополнительные предметы под свои приёмы, и правила обязаны
+            # называть ИТОГОВЫЕ числа, а не базовые. Иначе автор прочтёт в
+            # правилах одно, а в списке компонентов увидит другое.
+            computed = components_agent.final(params, modules)
         except components_agent.ComponentsError as error:
             self.send_json({
                 "error": "Правила пишутся по рассчитанным компонентам, а расчёт "
@@ -392,7 +398,6 @@ class Handler(BaseHTTPRequestHandler):
 
         attempts = self._attempts(payload)
         built_on = [self.chain_note(c) for c in chain]
-        modules = {link["phase"]: link["module"] for link in chain}
         rows = computed["components"]
 
         job_id = jobs.submit(
@@ -422,17 +427,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(error[0], error[1])
             return
 
+        modules = {link["phase"]: link["module"] for link in chain
+                   if link["phase"] != "rules"}
+
         try:
-            computed = components_agent.final(params)
+            # С модулями — по той же причине, что и у правил: заявки сюжета и
+            # особенностей на дополнительные предметы обязаны попасть и в
+            # описание, и в game_spec, иначе упакованная игра разойдётся с теми
+            # правилами, которые уже написаны по итоговым числам.
+            computed = components_agent.final(params, modules)
         except components_agent.ComponentsError as error:
             self.send_json({
                 "error": "Упаковка описывает рассчитанные компоненты, а расчёт "
                          "не выполнен: %s" % error,
                 "stage": "компоненты"}, 422)
             return
-
-        modules = {link["phase"]: link["module"] for link in chain
-                   if link["phase"] != "rules"}
         # Правила приходят из своей задачи тем же путём, что и модули, но в
         # описание идут не как модуль, а как готовый текст разделов.
         rules_variant = next(link["module"] for link in chain
@@ -529,6 +538,30 @@ class Handler(BaseHTTPRequestHandler):
                 return None, error
             chain.append(link)
         return chain, None
+
+    @classmethod
+    def modules_from_jobs(cls, payload, phases):
+        """Модули по НЕОБЯЗАТЕЛЬНЫМ номерам задач: что нашлось, то и берём.
+
+        Отличается от accepted_chain намеренно. Та — ворота: без принятого
+        основания этап не начинается вовсе. Здесь же речь о ПОКАЗЕ расчёта,
+        который должен работать и до того, как собраны сюжет с особенностями:
+        отказывать в показе, пока их нет, значило бы прятать этап 5 до конца
+        конвейера.
+
+        Возвращает (модули, список неучтённых фаз). Второе не декорация: без
+        модулей числа выйдут базовыми, и автор должен знать, что это ещё не
+        итог, а не гадать, почему в правилах их стало больше.
+        """
+        modules, missing = {}, []
+        for phase in phases:
+            link, error = cls.accepted_module(payload.get("%s_job_id" % phase),
+                                              phase, force=True)
+            if error or not link:
+                missing.append(phase)
+                continue
+            modules[phase] = link["module"]
+        return modules, missing
 
     @staticmethod
     def chain_note(link):
@@ -650,15 +683,26 @@ class Handler(BaseHTTPRequestHandler):
                             "stage": "компоненты"}, 400)
             return
 
+        # Второй проход считаем С МОДУЛЯМИ, если страница их назвала: сюжет и
+        # особенности могли попросить дополнительные предметы, и показ обязан
+        # сойтись с тем, что уедет в правила и в упаковку. Иначе автор увидит
+        # здесь одно число, а в правилах другое — и оба будут «правильные».
+        modules, missing = {}, []
+        if which == "final":
+            modules, missing = self.modules_from_jobs(payload, ("story", "features"))
+
         try:
             if which == "base":
                 result = components_agent.base(params)
             else:
-                result = components_agent.final(params)
+                result = components_agent.final(params, modules)
         except components_agent.ComponentsError as error:
             self.send_json({"error": str(error), "stage": "компоненты"}, 422)
             return
 
+        # Какие модули не удалось учесть — говорим прямо. Молчание здесь дало бы
+        # заниженные числа, неотличимые от честных.
+        result["without_modules"] = missing
         self.send_json(result)
 
     def route_complete(self, payload):

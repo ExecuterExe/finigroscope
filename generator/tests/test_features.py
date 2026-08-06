@@ -19,6 +19,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from agents import components  # noqa: E402
 from agents import features  # noqa: E402
 
 
@@ -420,3 +421,69 @@ def test_в_промпт_не_уходят_лишние_поля_модулей(
     lib = features.for_prompt(features.filter_library(params())[0])
     message = features.build_user_message(params(), noisy, STORY, lib)
     assert "длинное обоснование" not in message
+
+
+# --------------------------------------------------------------------------
+# Заявки на дополнительные компоненты (этап 5 считает их дельтой)
+# --------------------------------------------------------------------------
+
+def просит(component, count, **over):
+    row = {"component": component, "count": count,
+           "per_player": False, "why": "под приём с подсказками"}
+    row.update(over)
+    return {components.EXTRA_FIELD: [row]}
+
+
+COMPONENTS_PARAMS = {"components": ["карты", "жетоны"]}
+
+
+def трио(first_over=None):
+    """Полный годный ответ; заявка кладётся в первый вариант.
+
+    Берём ту же оснастку three(), что и остальные проверки: у вариантов должны
+    быть РАЗНЫЕ наборы приёмов, иначе сработает своя проверка и заслонит ту,
+    ради которой тест написан.
+    """
+    variants = list(three())
+    if first_over:
+        variants[0] = dict(variants[0], **first_over)
+    return answer(*variants)
+
+
+def test_без_заявок_на_компоненты_всё_в_порядке():
+    """Пустое поле — самый частый и совершенно нормальный ответ."""
+    assert problems_of(трио(), p=params(**COMPONENTS_PARAMS)) == []
+    assert problems_of(трио({components.EXTRA_FIELD: []}),
+                       p=params(**COMPONENTS_PARAMS)) == []
+
+
+def test_годная_заявка_не_ловится_как_названное_количество():
+    """Ловушка, которую легко себе устроить: поле с числами обязано объяснять
+    их словами, а рядом живёт проверка «количества считает программа». Без
+    исключения поля модуль уходил бы на перегенерацию за правильную работу."""
+    data = трио(просит("жетоны", 4, why="нужно 4 жетона подсказок"))
+    assert problems_of(data, p=params(**COMPONENTS_PARAMS)) == []
+
+
+def test_компонент_вне_выбора_автора_отвергается():
+    """Ввести новый тип предмета модуль не вправе: автор его не заказывал."""
+    data = трио(просит("фигурки", 3))
+    problems = problems_of(data, p=params(**COMPONENTS_PARAMS))
+    assert any("нет в ответах автора" in p for p in problems)
+
+
+def test_заявка_без_причины_отвергается():
+    data = трио(просит("жетоны", 3, why=""))
+    assert any("зачем" in p for p in problems_of(data, p=params(**COMPONENTS_PARAMS)))
+
+
+def test_нецелое_количество_отвергается():
+    data = трио(просит("жетоны", "пять"))
+    assert any("положительным" in p
+               for p in problems_of(data, p=params(**COMPONENTS_PARAMS)))
+
+
+def test_запредельное_количество_отвергается():
+    data = трио(просит("жетоны", components.MAX_EXTRA_COUNT + 1))
+    assert any("больше предела" in p
+               for p in problems_of(data, p=params(**COMPONENTS_PARAMS)))

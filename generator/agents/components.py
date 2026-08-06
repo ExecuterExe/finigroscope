@@ -278,6 +278,84 @@ def _requested(params):
     return wanted, unknown
 
 
+# --- заявки модулей на дополнительные предметы -------------------------------
+#
+# Поле, которым сюжет (этап 3) и особенности (этап 4) просят добавить предметы
+# под свой приём. Необязательное: пустой список — обычное дело, а не пробел.
+EXTRA_FIELD = "extra_components"
+
+# Потолок одной заявки. Не про вкус, а про защиту от опечатки модели: «700
+# жетонов» приедет в напечатанную коробку, и заметить это будет уже некому.
+MAX_EXTRA_COUNT = 60
+
+
+def extras_from(modules, params, known):
+    """Разбирает заявки модулей. Возвращает (принятые, отклонённые с причиной).
+
+    Заявка принимается ТОЛЬКО если она:
+      • называет компонент, который автор выбрал в опроснике и который считается
+        по таблице — иначе модуль вводит предмет, которого автор не заказывал,
+        а это работа аудитора, а не расчёта;
+      • просит целое положительное количество в разумных пределах;
+      • объясняет зачем — без причины число нечем оспорить.
+
+    Отклонённая заявка не исчезает: она возвращается с причиной и показывается
+    автору. Модуль на неё рассчитывает, и молчаливая потеря означала бы правила,
+    ссылающиеся на предметы, которых в коробке нет.
+    """
+    chosen = set(params.get("components") or [])
+    accepted, rejected = [], []
+
+    for phase, module in (modules or {}).items():
+        for raw in (module or {}).get(EXTRA_FIELD) or []:
+            if not isinstance(raw, dict):
+                rejected.append({"phase": phase, "raw": raw,
+                                 "reason": "заявка не является объектом"})
+                continue
+
+            name = _norm(raw.get("component"))
+            count = raw.get("count")
+            why = str(raw.get("why") or "").strip()
+
+            if name not in chosen:
+                rejected.append({
+                    "phase": phase, "component": raw.get("component"),
+                    "reason": "автор не выбирал такой компонент в опроснике"})
+                continue
+            if name not in known:
+                rejected.append({
+                    "phase": phase, "component": name,
+                    "reason": "компонент не считается по таблице"})
+                continue
+            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                rejected.append({
+                    "phase": phase, "component": name,
+                    "reason": "количество должно быть целым положительным, "
+                              "получено %r" % (count,)})
+                continue
+            if count > MAX_EXTRA_COUNT:
+                rejected.append({
+                    "phase": phase, "component": name,
+                    "reason": "запрошено %d — больше предела %d на одну заявку"
+                              % (count, MAX_EXTRA_COUNT)})
+                continue
+            if not why:
+                rejected.append({
+                    "phase": phase, "component": name,
+                    "reason": "не сказано, зачем нужны дополнительные предметы"})
+                continue
+
+            accepted.append({
+                "phase": phase,
+                "component": name,
+                "count": count,
+                "per_player": bool(raw.get("per_player")),
+                "why": why,
+            })
+
+    return accepted, rejected
+
+
 def base(params):
     """Проход 1 — после механик. Количества для симуляции, без материалов.
 
@@ -302,24 +380,31 @@ def base(params):
     }
 
 
-def final(params, features=None, story=None):
-    """Проход 2 — после особенностей. Пересчёт плюс материал.
+def final(params, modules=None):
+    """Проход 2 — после особенностей. Пересчёт с дельтой плюс материал.
 
-    ЧЕСТНО О ТЕКУЩЕМ СОСТОЯНИИ: дельта здесь пока всегда нулевая, и это не
-    ошибка расчёта, а отсутствие источника. Оба прохода считаются от одних и тех
-    же ответов опросника, а модули сюжета и особенностей своих требований к
-    количеству компонентов ещё не выдают — им просто нечем сдвинуть число.
+    Дельта берётся из ЗАЯВОК модулей (см. extras_from): сюжет и особенности
+    вправе попросить дополнительные предметы под свои приёмы — «колода ролей по
+    одной на игрока», «пять жетонов подсказок». Заявка структурная, а не
+    вычитанная из текста: разбор прозы дал бы невоспроизводимый результат, а
+    поле со списком проверяется построчно и сверяется с ответами опросника.
 
-    Механизм дельты сделан сразу и работает: как только `features` или `story`
-    начнут возвращать «нужно ещё N жетонов» или «добавьте колоду ролей», сюда
-    добавляется их разбор, и разница станет видна в поле delta без правки всего
-    остального. Показывать «было 40, стало 45» важнее, чем просто «45».
+    Дельта показывается ОТДЕЛЬНО и всегда: «стало 45» ничего не объясняет, а
+    «было 40, +5 на колоду ролей (особенности)» — объясняет. Без этого автор не
+    сможет ни проверить число, ни оспорить его.
 
-    Что второй проход даёт УЖЕ СЕЙЧАС — материал: его нельзя было выбрать на
+    Что второй проход даёт помимо дельты — материал: его нельзя было выбрать на
     первом проходе, потому что там ещё неизвестны адаптация и место игры.
     """
     first = base(params)
     before = {r["component"]: r["quantity"] for r in first["components"]}
+
+    extras, rejected = extras_from(modules, params, known=set(before))
+    by_component = {}
+    for row in extras:
+        by_component.setdefault(row["component"], []).append(row)
+
+    players = (params.get("player_count") or {}).get("max") or 1
 
     rows = []
     for row in first["components"]:
@@ -327,13 +412,27 @@ def final(params, features=None, story=None):
         row = dict(row)
         row["material"] = materials(component, params)
         row["was"] = before[component]
-        row["delta"] = row["quantity"] - before[component]
+
+        asked = by_component.get(component) or []
+        added = 0
+        for extra in asked:
+            # «на игрока» умножаем здесь, а не на стороне модуля: сколько
+            # игроков — знает опросник, а не тот, кто просит.
+            extra["pieces"] = extra["count"] * (players if extra["per_player"] else 1)
+            added += extra["pieces"]
+
+        row["extras"] = asked
+        row["quantity"] = before[component] + added
+        row["delta"] = added
         rows.append(row)
 
     return {
         "pass": "final",
         "components": rows,
         "skipped": first["skipped"],
+        # Заявки, которые не удалось принять, НЕ пропадают молча: модуль на них
+        # рассчитывает, и автор должен узнать, что в коробку они не поедут.
+        "rejected_extras": rejected,
         "total_pieces": sum(r["quantity"] for r in rows),
         "changed": [r["component"] for r in rows if r["delta"]],
     }

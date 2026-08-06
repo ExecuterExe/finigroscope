@@ -199,6 +199,98 @@ def test_второй_проход_добавляет_материал_и_дел
         assert "was" in row and "delta" in row
 
 
+# --------------------------------------------------------------------------
+# Заявки модулей на дополнительные предметы
+# --------------------------------------------------------------------------
+
+def просит(component, count, per_player=False, why="под приём"):
+    return {C.EXTRA_FIELD: [{"component": component, "count": count,
+                             "per_player": per_player, "why": why}]}
+
+
+def test_без_заявок_дельта_нулевая():
+    """Базовый комплект посчитан по таблицам, и трогать его без причины нельзя."""
+    out = C.final(make(), {"story": {}, "features": {}})
+    assert all(r["delta"] == 0 for r in out["components"])
+    assert out["changed"] == []
+
+
+def test_заявка_особенностей_увеличивает_количество():
+    базовый = C.final(make())
+    итог = C.final(make(), {"features": просит("жетоны", 5)})
+
+    было = {r["component"]: r["quantity"] for r in базовый["components"]}
+    строка = [r for r in итог["components"] if r["component"] == "жетоны"][0]
+
+    assert строка["quantity"] == было["жетоны"] + 5
+    assert строка["delta"] == 5
+    assert строка["was"] == было["жетоны"]
+    assert "жетоны" in итог["changed"]
+
+
+def test_дельта_объяснена_а_не_просто_посчитана():
+    """«Стало 45» ничего не объясняет — автор не сможет ни проверить, ни оспорить."""
+    итог = C.final(make(), {"features": просит("жетоны", 5, why="жетоны подсказок")})
+    строка = [r for r in итог["components"] if r["component"] == "жетоны"][0]
+    заявка = строка["extras"][0]
+    assert заявка["phase"] == "features"
+    assert заявка["why"] == "жетоны подсказок"
+    assert заявка["pieces"] == 5
+
+
+def test_на_игрока_умножается_программой():
+    """Сколько игроков — знает опросник, а не тот, кто просит."""
+    итог = C.final(make(player_count={"min": 2, "max": 6}),
+                   {"story": просит("карты", 3, per_player=True)})
+    строка = [r for r in итог["components"] if r["component"] == "карты"][0]
+    assert строка["delta"] == 3 * 6
+    assert строка["extras"][0]["pieces"] == 18
+
+
+def test_заявки_разных_модулей_складываются():
+    итог = C.final(make(), {"story": просит("карты", 4),
+                            "features": просит("карты", 6)})
+    строка = [r for r in итог["components"] if r["component"] == "карты"][0]
+    assert строка["delta"] == 10
+    assert {e["phase"] for e in строка["extras"]} == {"story", "features"}
+
+
+def test_итого_предметов_учитывает_заявки():
+    базовый = C.final(make())["total_pieces"]
+    итог = C.final(make(), {"features": просит("жетоны", 7)})["total_pieces"]
+    assert итог == базовый + 7
+
+
+# --- что отклоняется, и почему это не молча ---------------------------------
+
+@pytest.mark.parametrize("заявка,кусок_причины", [
+    ({"component": "фигурки", "count": 3, "why": "зачем"}, "не выбирал"),
+    ({"component": "жетоны", "count": 0, "why": "зачем"}, "положительным"),
+    ({"component": "жетоны", "count": -5, "why": "зачем"}, "положительным"),
+    ({"component": "жетоны", "count": "пять", "why": "зачем"}, "положительным"),
+    ({"component": "жетоны", "count": 999, "why": "зачем"}, "предела"),
+    ({"component": "жетоны", "count": 3, "why": "  "}, "зачем"),
+])
+def test_негодная_заявка_отклоняется_с_причиной(заявка, кусок_причины):
+    итог = C.final(make(), {"features": {C.EXTRA_FIELD: [заявка]}})
+    assert len(итог["rejected_extras"]) == 1
+    assert кусок_причины in итог["rejected_extras"][0]["reason"]
+    # и количество при этом не изменилось
+    assert all(r["delta"] == 0 for r in итог["components"])
+
+
+def test_отклонённая_заявка_не_пропадает_молча():
+    """Модуль на неё рассчитывает: правила сошлются на предмет, которого нет."""
+    итог = C.final(make(), {"story": просит("фигурки", 3)})
+    assert итог["rejected_extras"], "заявка исчезла без следа"
+    assert итог["rejected_extras"][0]["phase"] == "story"
+
+
+def test_предел_на_заявку_защищает_от_опечатки_модели():
+    """«700 жетонов» приедет в напечатанную коробку, и заметить будет некому."""
+    assert 0 < C.MAX_EXTRA_COUNT <= 100
+
+
 def test_неизвестные_компоненты_не_теряются_молча():
     out = C.base(make(components=["карты", "телефоны"]))
     assert out["skipped"] == ["телефоны"]

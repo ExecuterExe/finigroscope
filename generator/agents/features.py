@@ -30,6 +30,7 @@ from pathlib import Path
 
 import llm
 from agents import checks
+from agents import components
 
 LIBRARY_FILE = Path(__file__).resolve().parent / "library" / "features.json"
 
@@ -194,6 +195,14 @@ SYSTEM_PROMPT = """# РОЛЬ
       ],
       "catch_up_help": "как игра помогает отстающим, либо null",
       "accessibility": "что сделано для заявленных групп ОВЗ, либо null",
+      "extra_components": [
+        {
+          "component": "название из списка выбранных автором, точно как там",
+          "count": 4,
+          "per_player": false,
+          "why": "под какой приём и зачем именно столько"
+        }
+      ],
       "fit_rationale": "почему этот набор подходит игре и не спорит с механиками",
       "risks": ["что может не сработать"]
     }
@@ -207,14 +216,34 @@ SYSTEM_PROMPT = """# РОЛЬ
     "concept_has_template_fields": true,
     "catch_up_matches_param": true,
     "adaptation_matches_param": true,
-    "no_component_quantities": true
+    "no_component_quantities": true,
+    "extras_from_chosen_components_only": true
   }
 }
+
+Про `extra_components`. Базовый комплект уже посчитан по таблицам, и трогать
+его нельзя. Но приём иногда требует ПРЕДМЕТОВ СВЕРХ базового набора — например
+отдельной колоды ролей или горсти жетонов подсказок. Такие добавки просят
+ЗДЕСЬ, списком, и никак иначе.
+
+  - `component` — только из тех, что автор выбрал в опроснике. Ввести новый тип
+    предмета нельзя: автор его не заказывал.
+  - `count` — целое от 1 до %d. При `per_player: true` это количество НА ОДНОГО
+    игрока; на число игроков программа умножит сама.
+  - `why` — обязательно. Без причины число нечем оспорить, и заявка будет
+    отклонена.
+
+Пустой список — нормальный и самый частый ответ. Просить добавку «на всякий
+случай» не надо: каждый лишний предмет удорожает коробку.
+
+Это единственное место, где особенностям вообще разрешено называть количества.
+В описаниях приёмов чисел по-прежнему быть не должно — за это отвечает
+`no_component_quantities`.
 
 Поле `error` заполняется строкой, только если ни один доступный приём не
 сочетается с принятыми модулями; тогда `variants` остаётся пустым.
 Вариантов всегда ровно три, если только не сработало это исключение.""" % (
-    MIN_FEATURES, MAX_FEATURES)
+    MIN_FEATURES, MAX_FEATURES, components.MAX_EXTRA_COUNT)
 
 
 # --------------------------------------------------------------------------
@@ -515,7 +544,15 @@ def validate(data, features, params, mechanics_module, story_module,
         problems.extend(_check_catch_up(label, variant, params))
         problems.extend(_check_adaptation(label, variant, params))
 
-        text = checks.flatten_text(variant, skip=("variant_id",))
+        problems.extend(checks.extra_components_problems(variant, params, label))
+
+        # extra_components ИСКЛЮЧЕНО из текста намеренно: это единственное поле,
+        # где количества разрешены, и оно же обязано объяснять их словами. Без
+        # исключения объяснение «нужно 4 жетона подсказок» ловилось бы проверкой
+        # «количества считает программа» — и модуль уходил бы на перегенерацию
+        # за то, что сделал правильно.
+        text = checks.flatten_text(variant,
+                                   skip=("variant_id", components.EXTRA_FIELD))
 
         quantity = checks.quantity_hit(text, artifact_names)
         if quantity:

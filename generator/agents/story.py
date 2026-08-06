@@ -35,6 +35,7 @@ from pathlib import Path
 
 import llm
 from agents import checks
+from agents import components
 
 LIBRARY_FILE = Path(__file__).resolve().parent / "library" / "story.json"
 
@@ -200,6 +201,14 @@ SYSTEM_PROMPT = """# РОЛЬ
          "name": "как он называется в игре",
          "role": "чем является по сюжету"}
       ],
+      "extra_components": [
+        {
+          "component": "название из списка выбранных автором, точно как там",
+          "count": 4,
+          "per_player": false,
+          "why": "под какой сюжетный предмет и зачем именно столько"
+        }
+      ],
       "fit_rationale": "почему этот сюжет подходит под механики, мир и возраст",
       "risks": ["что может не сработать в этом сюжете"]
     }
@@ -214,9 +223,27 @@ SYSTEM_PROMPT = """# РОЛЬ
     "all_components_named": true,
     "world_respected": true,
     "age_content_safe": true,
-    "title_is_short": true
+    "title_is_short": true,
+    "extras_from_chosen_components_only": true
   }
 }
+
+Про `extra_components`. Базовый комплект уже посчитан по таблицам, и трогать его
+нельзя. Но сюжетный предмет иногда требует ДОПОЛНИТЕЛЬНЫХ вещей сверх базового
+набора — отдельной колоды писем, горсти жетонов улик. Такие добавки просят
+ЗДЕСЬ, списком, и никак иначе.
+
+  - `component` — только из тех, что автор выбрал в опроснике. Ввести новый тип
+    предмета нельзя: автор его не заказывал.
+  - `count` — целое положительное, в разумных пределах. При `per_player: true`
+    это количество НА ОДНОГО игрока; на число игроков программа умножит сама.
+  - `why` — обязательно: без причины число нечем оспорить, и заявка отклоняется.
+
+Пустой список — нормальный и самый частый ответ.
+
+Это единственное место, где сюжету разрешено называть количества. В описаниях
+артефактов чисел по-прежнему быть не должно — за это отвечает
+`no_component_quantities`.
 
 Поле `error` заполняется строкой, только если ни одна доступная завязка не
 сочетается с принятыми механиками; тогда `variants` остаётся пустым.
@@ -509,8 +536,15 @@ SEED_FIELD = "seed_id"
 INVENTED_FIELDS = ["id", "name", "premise", "conflict", "goal_shape"]
 
 def _text_of(variant):
-    """Текст варианта для поиска слов, без служебных идентификаторов."""
-    return checks.flatten_text(variant, skip=("variant_id", SEED_FIELD))
+    """Текст варианта для поиска слов, без служебных идентификаторов.
+
+    extra_components исключено намеренно: это единственное поле, где количества
+    разрешены, и оно же обязано объяснять их словами. Иначе объяснение «нужно 4
+    жетона улик» ловилось бы проверкой «количества считает программа», и модуль
+    уходил бы на перегенерацию за то, что сделал правильно.
+    """
+    return checks.flatten_text(
+        variant, skip=("variant_id", SEED_FIELD, components.EXTRA_FIELD))
 
 
 def _artifact_names(variant):
@@ -588,6 +622,8 @@ def validate(data, seeds, params, mechanics_module, mode=MODE_STRICT):
         for field in REQUIRED_VARIANT_FIELDS:
             if field not in variant:
                 problems.append("%s: нет поля %s." % (label, field))
+
+        problems.extend(checks.extra_components_problems(variant, params, label))
 
         ids_seen.append(variant.get("variant_id"))
         seeds_seen.append(variant.get(SEED_FIELD))

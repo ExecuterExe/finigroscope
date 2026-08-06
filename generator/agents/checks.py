@@ -38,6 +38,67 @@ SCARY_WORDS = ("смерт", "убий", "убит", "кровь", "кровав
                "проклят", "жутк")
 
 
+def extra_components_problems(variant, params, label):
+    """Заявки модуля на дополнительные предметы: что здесь однозначно неверно.
+
+    Проверка живёт тут, а не в каждом агенте, по причине из шапки модуля: сюжет
+    и особенности просят добавки одинаково, и два экземпляра одного правила
+    разойдутся молча.
+
+    Пустой список — не проблема, а самый частый ответ: базовый комплект уже
+    посчитан по таблицам, и большинству модулей добавлять к нему нечего.
+
+    Здесь ловится только то, что делает заявку неисполнимой. Разумность самой
+    просьбы («нужна ли этой игре колода ролей») кодом не проверяется — это
+    суждение, и за него отвечают аудитор и линзы.
+    """
+    from agents import components            # локально: избегаем цикла импорта
+
+    problems = []
+    chosen = set(params.get("components") or [])
+    rows = variant.get(components.EXTRA_FIELD)
+
+    if rows is None:
+        return problems
+    if not isinstance(rows, list):
+        return ["%s: extra_components должно быть списком." % label]
+
+    for row in rows:
+        if not isinstance(row, dict):
+            problems.append("%s: заявка на компоненты не объект: %r." % (label, row))
+            continue
+
+        name = str(row.get("component") or "").strip().lower()
+        count = row.get("count")
+
+        if not name:
+            problems.append("%s: в заявке не назван компонент." % label)
+        elif name not in chosen:
+            # Ввести новый тип предмета модуль не вправе: автор его не заказывал,
+            # и на этапе 5 такую заявку всё равно отклонят — лучше переделать
+            # модуль сейчас, чем показать автору правила со ссылкой на предмет,
+            # которого в коробке не будет.
+            problems.append(
+                "%s: заявлен компонент «%s», которого нет в ответах автора "
+                "(выбраны: %s)." % (label, row.get("component"),
+                                    ", ".join(sorted(chosen)) or "ничего"))
+
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            problems.append(
+                "%s: у заявки на «%s» количество должно быть целым "
+                "положительным, получено %r." % (label, name or "?", count))
+        elif count > components.MAX_EXTRA_COUNT:
+            problems.append(
+                "%s: у заявки на «%s» количество %d больше предела %d."
+                % (label, name, count, components.MAX_EXTRA_COUNT))
+
+        if not str(row.get("why") or "").strip():
+            problems.append(
+                "%s: не сказано, зачем дополнительные «%s»." % (label, name or "?"))
+
+    return problems
+
+
 def flatten_text(variant, skip=()):
     """Весь пользовательский текст варианта одной строкой — для поиска слов.
 
