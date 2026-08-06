@@ -291,6 +291,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(error), "stage": "параметры"}, 400)
             return
 
+        if self.refuse_if_misconfigured():
+            return
+
         attempts = payload.get("attempts")
         if not isinstance(attempts, int) or not 1 <= attempts <= pipeline.MAX_ATTEMPTS:
             attempts = pipeline.MAX_ATTEMPTS
@@ -307,6 +310,9 @@ class Handler(BaseHTTPRequestHandler):
             params = params_module.build(payload.get("answers"))
         except params_module.ParamsError as error:
             self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        if self.refuse_if_misconfigured():
             return
 
         # Ворота проверяет СЕРВЕР по результату прохода механик, а не страница.
@@ -339,6 +345,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": str(error), "stage": "параметры"}, 400)
             return
 
+        if self.refuse_if_misconfigured():
+            return
+
         chain, error = self.accepted_chain(payload, [
             ("mechanics_job_id", "mechanics"),
             ("story_job_id", "story"),
@@ -366,6 +375,9 @@ class Handler(BaseHTTPRequestHandler):
             params = params_module.build(payload.get("answers"))
         except params_module.ParamsError as error:
             self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        if self.refuse_if_misconfigured():
             return
 
         chain, error = self.accepted_chain(payload, [
@@ -415,6 +427,9 @@ class Handler(BaseHTTPRequestHandler):
             params = params_module.build(payload.get("answers"))
         except params_module.ParamsError as error:
             self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        if self.refuse_if_misconfigured():
             return
 
         chain, error = self.accepted_chain(payload, [
@@ -538,6 +553,27 @@ class Handler(BaseHTTPRequestHandler):
                 return None, error
             chain.append(link)
         return chain, None
+
+    def refuse_if_misconfigured(self):
+        """Отказ ДО первого платного вызова, если связь заведомо не заработает.
+
+        Проход стоит до девяти обращений к моделям, и последнее из них — оценка
+        по линзам в СОСЕДНЕМ сервисе. Если его адрес не настроен, узнать об этом
+        в конце значит оплатить генерацию и аудит впустую. Проверка мгновенная и
+        ничего не стоит; отказ — с текстом, по которому видно, что вписать.
+
+        Локально молчит: там 127.0.0.1 и есть правильный адрес.
+        """
+        problem = config.neighbour_problem()
+        if not problem:
+            return False
+        self.send_json({
+            "error": "Проход не начат: %s Ни одного обращения к модели не "
+                     "сделано — платить за работу, которая всё равно не "
+                     "дойдёт до оценки, незачем." % problem,
+            "stage": "настройка",
+        }, 503)
+        return True
 
     @classmethod
     def modules_from_jobs(cls, payload, phases):
