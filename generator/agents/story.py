@@ -836,7 +836,7 @@ def generate(params, mechanics_module, attempts=MAX_ATTEMPTS, temperature=1.0):
             # вариативность обязательна: одинаковые сюжеты у разных людей с
             # одинаковыми ответами — прямо то, чего ТЗ велит избегать
             temperature=temperature,
-            max_tokens=4000,
+            max_tokens=8000,
         )
         data = result["data"]
         problems, warnings = validate(data, seeds, params, mechanics_module, mode)

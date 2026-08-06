@@ -366,7 +366,7 @@ def generate(params, modules, components, attempts=MAX_ATTEMPTS, temperature=0.7
         result = llm.complete_json(
             [{"role": "system", "content": SYSTEM_PROMPT},
              {"role": "user", "content": user_message}],
-            tier="pro", temperature=temperature, max_tokens=4000)
+            tier="pro", temperature=temperature, max_tokens=8000)
 
         data = result["data"]
         problems, warnings = validate(data, params, modules, components)

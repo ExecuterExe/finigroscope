@@ -43,6 +43,18 @@ class LLMError(Exception):
     user_facing = True
 
 
+class BadAnswer(LLMError):
+    """Модель ответила, но ответом пользоваться нельзя: обрыв, не JSON, мусор.
+
+    Отдельный класс нужен вызывающему, чтобы отличить «связи нет» от «ответ
+    негодный». Разница в том, что делать дальше: при отказе сети повтор
+    бессмысленен и проход надо прекращать, а негодный ответ — ровно то, ради
+    чего у прохода есть три попытки. Пока оба случая были одним классом, любой
+    оборванный ответ убивал проход целиком, хотя следующая попытка обычно
+    проходила.
+    """
+
+
 def _model_for(tier, thinking=False):
     """Модель для вызова.
 
@@ -145,6 +157,10 @@ def _post(request, limit):
         повтор рискует оплатить генерацию дважды.
     """
     last_error = None
+    # Каким классом сдаваться в конце. Оборванное тело — «негодный ответ»
+    # (BadAnswer): проход вправе потратить на него одну попытку и продолжить.
+    # Отказ сети — LLMError: следующая попытка упрётся в то же самое.
+    last_class = LLMError
 
     for attempt in range(1, SEND_ATTEMPTS + 1):
         try:
@@ -157,15 +173,38 @@ def _post(request, limit):
             last_error = _http_error(e)
         except urllib.error.URLError as e:
             last_error = "Не удалось связаться с OpenRouter: %s" % e.reason
+            last_class = LLMError
         except TimeoutError:
             raise LLMError("OpenRouter не ответил за %d с." % limit)
-        except json.JSONDecodeError:
-            raise LLMError("OpenRouter вернул не JSON.")
+        except json.JSONDecodeError as e:
+            # ПОВТОРЯЕМ. Сперва этот случай был объявлен неповторяемым —
+            # «провайдер ответил мусором, разбирать нечего». Рассуждение верно
+            # для страницы-заглушки и неверно для главного случая: тело ответа
+            # приходит ОБОРВАННЫМ на середине, когда соединение рвётся посреди
+            # длинной выдачи. Это ровно такая же случайность, как обрыв связи, и
+            # лечится ровно так же — вторым запросом.
+            #
+            # Так выглядели живые сбои: «Expecting value: line 763 column 1
+            # (char 4191)» и «OpenRouter вернул не JSON» — оба на модуле
+            # особенностей, у которого ответ самый длинный.
+            last_error = ("OpenRouter вернул неполный или испорченный ответ (%s)"
+                          % e)
+            last_class = BadAnswer
 
         if attempt < SEND_ATTEMPTS:
             time.sleep(RETRY_PAUSE * attempt)
 
-    raise LLMError("%s Не помогли %d попытки." % (last_error, SEND_ATTEMPTS))
+    raise last_class("%s Не помогли %d попытки." % (last_error, SEND_ATTEMPTS))
+
+
+# На сколько увеличиваем предел, если ответ оборвался на нём. Полтора раза, а не
+# вдвое: цель — дотянуть до конца уже почти готового ответа, а не разрешить
+# модели писать вдвое больше.
+LIMIT_GROWTH = 1.5
+
+# Выше этого не поднимаем даже автоматически: если ответ не уложился и сюда,
+# дело не в тесном лимите, а в том, что агента просят слишком о многом.
+MAX_TOKENS_CEILING = 12000
 
 
 def complete_json(messages, **kwargs):
@@ -173,13 +212,43 @@ def complete_json(messages, **kwargs):
 
     Агентам по документу нужен строго структурированный ответ, поэтому просим
     модель о json_object и падаем с внятной ошибкой, если она не послушалась.
+
+    ОБРЫВ НА ЛИМИТЕ ТОКЕНОВ разбирается отдельно, и это не мелочь. Модель,
+    упёршаяся в max_tokens, возвращает JSON, оборванный на середине —
+    `finish_reason` при этом равен "length". Раньше это поле приходило и не
+    читалось никем, а наружу шло «Модель вернула не JSON»: обвинение в адрес
+    модели за то, что сделали мы сами. На модуле особенностей, где ответ самый
+    длинный, так падали ВСЕ три попытки подряд.
+
+    Оборванный ответ добираем повтором с увеличенным пределом — один раз.
+    Дальше честно говорим, что предел мал, и называем число: это настройка
+    агента, и чинить её надо там, а не гадать.
     """
     kwargs.setdefault("response_format", {"type": "json_object"})
     result = complete(messages, **kwargs)
+
+    truncated = result.get("finish_reason") == "length"
+    if truncated:
+        asked = kwargs.get("max_tokens") or config.max_tokens
+        grown = min(int(asked * LIMIT_GROWTH), MAX_TOKENS_CEILING)
+        if grown > asked:
+            print("[модель] ответ оборван на пределе %d токенов, повторяю с %d"
+                  % (asked, grown), flush=True)
+            kwargs["max_tokens"] = grown
+            result = complete(messages, **kwargs)
+            truncated = result.get("finish_reason") == "length"
+            asked = grown
+        if truncated:
+            raise BadAnswer(
+                "Ответ модели оборван на пределе в %d токенов — это предел "
+                "запроса, а не ошибка модели. Увеличьте max_tokens у этого "
+                "агента." % asked)
+
     try:
         result["data"] = json.loads(result["text"])
-    except json.JSONDecodeError:
-        raise LLMError("Модель вернула не JSON: %s" % result["text"][:200])
+    except json.JSONDecodeError as e:
+        raise BadAnswer("Модель вернула не JSON (%s). Начало ответа: %s"
+                       % (e, result["text"][:200]))
     return result
 
 

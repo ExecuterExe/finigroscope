@@ -774,7 +774,7 @@ def generate(params, mechanics_module, story_module, attempts=MAX_ATTEMPTS,
              {"role": "user", "content": user_message}],
             tier="pro",
             temperature=temperature,
-            max_tokens=4000,
+            max_tokens=8000,
         )
         data = result["data"]
         problems, warnings = validate(data, features, params, mechanics_module,

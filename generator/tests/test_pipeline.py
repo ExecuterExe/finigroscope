@@ -769,3 +769,31 @@ def test_нехватка_библиотеки_по_прежнему_не_пов
 
     assert fakes.calls["generate"] == 1
     assert "Библиотека механик" in str(error.value)
+
+
+def test_негодный_ответ_модели_стоит_одной_попытки(monkeypatch):
+    """Раньше любой оборванный ответ убивал проход целиком: он ловился вместе с
+    отказом сети одним классом. На модуле особенностей, где ответ самый длинный
+    и обрывается чаще всего, так падали все три попытки, и до аудита дело не
+    доходило ни разу."""
+    беда = pipeline.llm.BadAnswer("Модель вернула не JSON")
+    fakes = Fakes(monkeypatch, [беда, generation(2)], [audit()], [lens(7.0)])
+
+    out = pipeline.run(PARAMS, Progress())
+
+    assert out["passed"] is True, "проход не пережил один негодный ответ"
+    assert out["attempts_made"] == 2
+    assert out["attempts"][0]["ok"] is False
+    assert "непригоден" in out["attempts"][0]["reason"]
+    assert fakes.calls["audit"] == 1, "аудит не дождался годного ответа"
+
+
+def test_отказ_сети_по_прежнему_прекращает_проход(monkeypatch):
+    """Тратить попытки на то, что не пройдёт никогда, незачем."""
+    беда = pipeline.llm.LLMError("Не удалось связаться с OpenRouter")
+    fakes = Fakes(monkeypatch, [беда], [audit()], [lens(7.0)])
+
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.run(PARAMS, Progress())
+
+    assert fakes.calls["generate"] == 1, "проход продолжился при отказе сети"

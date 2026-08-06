@@ -658,7 +658,7 @@ def generate(params, attempts=MAX_ATTEMPTS, temperature=1.0):
             tier="pro",
             # вариативность обязательна: одинаковые ответы != одинаковые игры
             temperature=temperature,
-            max_tokens=4000,
+            max_tokens=6000,
         )
         data = result["data"]
         problems, warnings = validate(data, mechanics, params, mode)
