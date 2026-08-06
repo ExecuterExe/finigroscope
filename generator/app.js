@@ -1654,7 +1654,41 @@ function passStop(pass, html) {
     if (slot) slot.innerHTML = html;
 }
 
+/* Сколько сорвавшихся опросов подряд переживаем, прежде чем сдаться.
+
+   Опрос — это НАБЛЮДЕНИЕ за задачей, а не сама задача: она в это время идёт на
+   сервере и от неудачного запроса не страдает. Прерывать проход из-за одного
+   «Failed to fetch» значит потерять работу, за которую уже заплачено, — а
+   поводов для такого сбоя хватает: уснувший бесплатный инстанс, перезапуск
+   сервера сторожем, моргнувшая сеть, спящий ноутбук.
+
+   Пять попыток с растущей паузой — это около минуты терпения: ровно столько
+   просыпается бесплатный сервис. */
+const POLL_RETRIES = 5;
+const POLL_RETRY_PAUSE = 3000;
+
 function passPoll(pass, jobId, started) {
+    let misses = 0;
+
+    function stumbled(message) {
+        misses += 1;
+        if (misses > POLL_RETRIES) {
+            passStop(pass, lensFailHtml({
+                error: 'Связь с сервером потеряна: ' + message +
+                       '. Задача могла остаться выполняться — номер ' + jobId + '.'
+            }));
+            bindPassRetry(pass);
+            return;
+        }
+        const slot = document.getElementById(pass.slotId);
+        if (slot) {
+            slot.innerHTML = '<div class="gen-wait">Сервер не отвечает ' +
+                '(' + esc(message) + '). Попытка ' + misses + ' из ' +
+                POLL_RETRIES + ' — задача при этом продолжает идти.</div>';
+        }
+        setTimeout(ask, POLL_RETRY_PAUSE * misses);
+    }
+
     function ask() {
         fetch('api/pipeline/status', {
             method: 'POST',
@@ -1665,6 +1699,10 @@ function passPoll(pass, jobId, started) {
         }).then(function(body) {
             const slot = document.getElementById(pass.slotId);
             if (!slot) return;
+
+            // Дошло — счётчик срывов обнуляем: важна ЦЕПОЧКА неудач подряд, а
+            // не их общее число за долгий проход.
+            misses = 0;
 
             if (!body || body.error && !body.status) {
                 passStop(pass, lensFailHtml(body || { error: 'Пустой ответ' }));
@@ -1715,8 +1753,7 @@ function passPoll(pass, jobId, started) {
             if (pass.cancellable !== false) bindPipeCancel(slot, jobId);
             setTimeout(ask, 2000);
         }).catch(function(e) {
-            passStop(pass, lensFailHtml({ error: 'Сервер не ответил: ' + e.message }));
-            bindPassRetry(pass);
+            stumbled(e.message || 'нет связи');
         });
     }
 
@@ -2522,43 +2559,86 @@ function mechanicsCardHtml(variant) {
 function storyCardHtml(variant) {
     if (!variant.title) return '';
 
-    let html = '<div class="story-card">' +
-        '<div class="story-name">' + esc(variant.title) + '</div>';
+    /* Разделы — по Приложению А, как и у механик. Этап 3 обязан дать ровно два:
+       «Название игры» (у него ЕСТЬ шаблон: Название игры: «___») и «Сюжет».
 
-    if (variant.logline) {
-        html += '<p class="story-logline">' + esc(variant.logline) + '</p>';
-    }
+       Раньше здесь лежали девять полей вперемешку: место действия, кем играют,
+       что на кону, развязка и персонажи стояли наравне с сюжетом, хотя все они
+       — его части. Название шло безымянным заголовком, без шаблона. Артефакты
+       выглядели новым разделом этапа 3, хотя это раздел 6, начатый на этапе 2:
+       здесь у него появляются только имена. */
+    let html = '<div class="story-card">';
 
-    [['setting', 'Место действия'], ['player_role', 'Кем играют'],
-     ['synopsis', 'Сюжет'], ['stakes', 'Что на кону'],
-     ['ending', 'Развязка']].forEach(function(field) {
+    // --- 1. Название игры (единственный раздел этапа с шаблоном) ---
+    html += '<div class="story-field">' +
+        '<span class="story-label">Название игры</span>' +
+        '<div class="story-name">«' + esc(variant.title) + '»</div>' +
+        (variant.logline
+            ? '<p class="story-logline">' + esc(variant.logline) + '</p>'
+            : '') +
+        '</div>';
+
+    // --- 4. Сюжет ---
+    let plot = '';
+    [['setting', 'Место действия'],
+     ['player_role', 'Кем выступают игроки'],
+     ['synopsis', 'История'],
+     ['stakes', 'Что на кону'],
+     ['ending', 'Чем заканчивается']].forEach(function(field) {
         const value = variant[field[0]];
         if (!value) return;
-        html += '<div class="story-field">' +
-            '<span class="story-label">' + field[1] + '</span>' +
-            '<p>' + esc(value) + '</p></div>';
+        plot += '<div class="section-part"><b>' + field[1] + '</b><p>' +
+            esc(value) + '</p></div>';
     });
-
     if ((variant.characters || []).length) {
-        html += '<div class="story-field">' +
-            '<span class="story-label">Персонажи</span><ul class="story-list">' +
+        plot += '<div class="section-part"><b>Персонажи</b><ul class="story-list">' +
             variant.characters.map(function(c) {
                 return '<li><b>' + esc(c.name || '') + '</b> — ' +
                     esc(c.role || '') + '</li>';
             }).join('') + '</ul></div>';
     }
+    if (plot) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Сюжет</span>' + plot + '</div>';
+    }
 
+    /* Артефакты — не новый раздел, а продолжение начатого на этапе механик:
+       там появились ТИПЫ, здесь имена, на расчёте компонентов — количество и
+       материал. Подписано именно так, иначе выглядит как три разных списка. */
     if ((variant.artifacts || []).length) {
         html += '<div class="story-field">' +
-            '<span class="story-label">Артефакты</span>' +
-            '<p class="story-hint">Сколько их и из чего они — посчитает ' +
-                'программа по таблицам. Здесь только имена и роль в истории.</p>' +
+            '<span class="story-label">Артефакты: названия</span>' +
+            '<p class="story-hint">Раздел начат на этапе механик — там были ' +
+                'типы предметов. Здесь у них появляются имена; количество и ' +
+                'материал посчитает программа по таблицам.</p>' +
             '<ul class="story-list">' +
             variant.artifacts.map(function(a) {
                 return '<li><b>' + esc(a.name || '') + '</b> ' +
                     '<span class="story-comp">' + esc(a.component || '') + '</span> — ' +
                     esc(a.role || '') + '</li>';
             }).join('') + '</ul></div>';
+    }
+
+    // Рабочие сведения: в описание игры не входят.
+    let service = '';
+    if (variant[/* seed_id */ 'seed_id']) {
+        service += '<div class="section-part"><b>Завязка из библиотеки</b>' +
+            '<div class="variant-mech"><span class="chip">' +
+            esc(variant.seed_id) + '</span></div></div>';
+    }
+    if (variant.fit_rationale) {
+        service += '<div class="section-part"><b>Почему подходит под ваши ответы' +
+            '</b><p>' + esc(variant.fit_rationale) + '</p></div>';
+    }
+    if ((variant.risks || []).length) {
+        service += '<div class="section-part"><b>Риски</b><ul class="story-list">' +
+            variant.risks.map(function(r) {
+                return '<li>' + esc(r) + '</li>';
+            }).join('') + '</ul></div>';
+    }
+    if (service) {
+        html += '<details class="story-service"><summary>Рабочие сведения ' +
+            'модуля: завязка, обоснование, риски</summary>' + service + '</details>';
     }
 
     return html + '</div>';

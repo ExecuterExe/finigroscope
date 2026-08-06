@@ -723,3 +723,42 @@ def test_тяжёлые_отчёты_на_экран_не_едут(monkeypatch):
     assert "variant" not in строка
     assert "audit" not in строка
     assert "lens" not in строка
+
+
+# --------------------------------------------------------------------------
+# Сбой обращения к модели: текст обязан дойти до автора
+# --------------------------------------------------------------------------
+
+def test_сбой_модели_доносит_настоящую_причину(monkeypatch):
+    """Поймано живым прогоном. Вокруг генерации ловился lens_review.LensError —
+    тип, которого генерация не бросает вовсе, — и llm.LLMError уходил наверх
+    необёрнутым. Очередь показывала «Проход не выполнен: LLMError», а точная
+    причина оставалась только в журнале сервера."""
+    беда = pipeline.llm.LLMError(
+        "Не удалось связаться с OpenRouter: [Errno 11002] getaddrinfo failed")
+    Fakes(monkeypatch, [беда], [audit()], [lens(7.0)])
+
+    with pytest.raises(pipeline.PipelineError) as error:
+        pipeline.run(PARAMS, Progress())
+
+    текст = str(error.value)
+    assert "getaddrinfo" in текст, "потеряна причина сбоя"
+    assert "mechanics" in текст, "не сказано, какой модуль не собрался"
+
+
+def test_ошибка_модели_помечена_как_человеческая():
+    """По метке очередь отличает объяснение для человека от случайного
+    исключения, в тексте которого может оказаться кусок промпта."""
+    assert getattr(pipeline.llm.LLMError, "user_facing", False) is True
+
+
+def test_нехватка_библиотеки_по_прежнему_не_повторяется(monkeypatch):
+    """Проверка соседнего except: он не должен был пострадать от правки."""
+    беда = pipeline.mechanics.NotEnoughMechanics("не хватает механик", [])
+    fakes = Fakes(monkeypatch, [беда], [audit()], [lens(7.0)])
+
+    with pytest.raises(pipeline.PipelineError) as error:
+        pipeline.run(PARAMS, Progress())
+
+    assert fakes.calls["generate"] == 1
+    assert "Библиотека механик" in str(error.value)

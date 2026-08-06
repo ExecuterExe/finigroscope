@@ -31,6 +31,8 @@
 шаг на экране, — поэтому ход прохода общий, а различия собраны в описании фазы.
 """
 
+import llm
+
 from agents import features
 from agents import lens_review
 from agents import mechanics
@@ -329,7 +331,16 @@ def _run_module(phase, step_label, step_detail, generate, fatal, params,
             # Библиотека не покрывает параметры. Повтор не поможет: следующая
             # попытка упрётся в то же самое, только за деньги.
             raise PipelineError(fatal_template % error) from error
-        except lens_review.LensError as error:                # noqa: PERF203
+        except llm.LLMError as error:                          # noqa: PERF203
+            # Сбой обращения к МОДЕЛИ: сеть, ключ, оплата, таймаут. Раньше здесь
+            # ловился lens_review.LensError — тип, которого генерация не бросает
+            # вовсе, — и настоящее исключение уходило наверх необёрнутым. Очередь
+            # показывала «Проход не выполнен: LLMError», а точный текст
+            # («Не удалось связаться с OpenRouter: getaddrinfo failed») оставался
+            # только в журнале сервера. Поймано живым прогоном.
+            raise PipelineError(
+                "Модуль «%s» не собран: %s" % (phase, error)) from error
+        except lens_review.LensError as error:
             raise PipelineError(str(error)) from error
 
         if not generated.get("ok"):
