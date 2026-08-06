@@ -298,7 +298,16 @@ checks["в отказе перечислены известные фазы"] = "
 # ЧАСТЬ 8. Очередь
 # ============================================================================
 lens_queue._reset_for_tests()
-job_id = lens_queue.submit(lambda: {"итог": "готово"})
+
+
+# Задача получает Progress собственной задачи: коротким он не нужен, длинным —
+# необходим, и контракт у обеих один.
+def работа(progress):
+    progress.say("считаю", detail="проверочный шаг")
+    return {"итог": "готово"}
+
+
+job_id = lens_queue.submit(работа)
 for _ in range(200):
     state = lens_queue.status(job_id)
     if state["status"] in (lens_queue.DONE, lens_queue.FAILED):
@@ -306,12 +315,15 @@ for _ in range(200):
     __import__("time").sleep(0.02)
 checks["задача очереди выполнилась"] = state["status"] == lens_queue.DONE
 checks["результат вернулся"] = state["result"] == {"итог": "готово"}
+checks["ход работы виден"] = state["step"] == "считаю"
+checks["подробность шага виден"] = state["detail"] == "проверочный шаг"
+checks["время работы считается"] = isinstance(state["elapsed"], float)
 checks["несуществующая задача даёт None"] = lens_queue.status("нет-такой") is None
 
 
 # Ниже очередь НАПЕЧАТАЕТ трассировку RuntimeError — так и задумано: полный текст
 # ошибки уходит в журнал, а наружу отдаётся только тип. Это не сбой проверки.
-def падает():
+def падает(progress):
     raise RuntimeError("секрет-из-промпта")
 
 
@@ -326,6 +338,93 @@ checks["упавшая задача помечена failed"] = state_bad["statu
 checks["текст исключения наружу не ушёл"] = "секрет-из-промпта" not in (
     state_bad["error"] or "")
 checks["но тип ошибки назван"] = "RuntimeError" in state_bad["error"]
+
+
+# --- полосы очереди ---------------------------------------------------------
+# Через очередь идут две работы с несопоставимой длительностью: оценка модуля
+# (минуты) и итоговый разбор игры (десятки минут). Пока пул был общим и
+# двухместным, двух разборов хватало, чтобы КАЖДАЯ оценка встала намертво, а
+# генератор сообщал «не уложилась» при исправном сервисе.
+checks["полос две"] = set(lens_queue.LANE_WORKERS) == {lens_queue.SHORT,
+                                                       lens_queue.LONG}
+checks["у короткой полосы больше одного места"] = (
+    lens_queue.LANE_WORKERS[lens_queue.SHORT] >= 2)
+checks["длинная полоса не занимает места короткой"] = (
+    lens_queue.LANE_WORKERS[lens_queue.LONG]
+    < lens_queue.LANE_WORKERS[lens_queue.SHORT] + 1)
+checks["неизвестная полоса отвергается"] = False
+try:
+    lens_queue.submit(работа, lane="какая-то")
+except ValueError:
+    checks["неизвестная полоса отвергается"] = True
+
+# Главное: короткая задача НЕ ждёт длинную. Занимаем всю длинную полосу и
+# смотрим, что оценка модуля проходит мимо неё.
+import threading as _threading  # noqa: E402
+
+_держим = _threading.Event()
+lens_queue._reset_for_tests()
+
+
+def долгая(progress):
+    progress.say("разбор игры")
+    _держим.wait(10)
+    return {"долгая": True}
+
+
+def короткая(progress):
+    return {"короткая": True}
+
+
+long_ids = [lens_queue.submit(долгая, lane=lens_queue.LONG)
+            for _ in range(lens_queue.LANE_WORKERS[lens_queue.LONG] + 1)]
+short_id = lens_queue.submit(короткая, lane=lens_queue.SHORT)
+
+for _ in range(300):
+    short_state = lens_queue.status(short_id)
+    if short_state["status"] in (lens_queue.DONE, lens_queue.FAILED):
+        break
+    __import__("time").sleep(0.02)
+
+checks["короткая задача не ждёт длинную"] = short_state["status"] == lens_queue.DONE
+checks["длинная в это время ещё идёт"] = any(
+    lens_queue.status(j)["status"] in (lens_queue.QUEUED, lens_queue.RUNNING)
+    for j in long_ids)
+# Задача, стоящая за чужой работой, должна об этом СКАЗАТЬ: «в очереди» без
+# числа не отличить от «висит».
+queued = [lens_queue.status(j) for j in long_ids]
+queued = [s for s in queued if s["status"] == lens_queue.QUEUED]
+checks["стоящая в очереди знает, сколько впереди"] = bool(queued) and all(
+    s.get("waiting_ahead", 0) >= 1 for s in queued)
+checks["полоса видна в состоянии"] = short_state["lane"] == lens_queue.SHORT
+
+_держим.set()
+lens_queue._reset_for_tests()
+
+
+# --- текст ошибки ------------------------------------------------------------
+# Часть ошибок пишется ДЛЯ ЧЕЛОВЕКА и помечает себя user_facing. Пока метка не
+# читалась, объяснение «Прогон скелета не разрешён… SIM_API_ALLOW_RUN=1»
+# подменялось строкой «не выполнена: HeadlessError» — единственная подсказка,
+# как это починить, до автора не доезжала.
+class _Человеческая(Exception):
+    user_facing = True
+
+
+человеческий_текст = ("Прогон скелета не разрешён. SIM_API_ALLOW_RUN=1 в "
+                      "окружении ФинИгроСкопа.")
+checks["помеченная ошибка доходит целиком"] = (
+    lens_queue.describe_failure(_Человеческая(человеческий_текст))
+    == человеческий_текст)
+checks["пустая помеченная ошибка не оставляет пусто"] = (
+    "_Человеческая" in lens_queue.describe_failure(_Человеческая("")))
+checks["непомеченная ошибка прячет текст"] = (
+    "секрет" not in lens_queue.describe_failure(RuntimeError("секрет-из-промпта")))
+# Про разбор игры нельзя говорить «оценка по линзам»: это разные работы.
+checks["упавший разбор назван разбором"] = (
+    "разбор" in lens_queue.describe_failure(RuntimeError("x"), lens_queue.LONG).lower())
+checks["упавшая оценка названа оценкой"] = (
+    "оценка" in lens_queue.describe_failure(RuntimeError("x"), lens_queue.SHORT).lower())
 
 
 # ============================================================================

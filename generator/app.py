@@ -128,6 +128,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/pipeline/features": self.route_pipeline_features,
             "/api/pipeline/rules": self.route_pipeline_rules,
             "/api/pipeline/package": self.route_pipeline_package,
+            "/api/pipeline/verdict": self.route_pipeline_verdict,
             "/api/pipeline/status": self.route_pipeline_status,
             "/api/pipeline/cancel": self.route_pipeline_cancel,
             "/api/components": self.route_components,
@@ -444,6 +445,61 @@ class Handler(BaseHTTPRequestHandler):
                 params, progress, modules, rows, rules_variant, built_on=built_on))
         self.send_json({"job_id": job_id, "built_on": built_on,
                         "components": computed}, 202)
+
+    # Итоговый разбор: упакованная игра уходит в ФинИгроСкоп целиком и проходит
+    # там симуляционный этап. Экранов у этого шага нет — только результат.
+    def route_pipeline_verdict(self, payload):
+        spec, error = self.packaged_spec(payload.get("package_job_id"))
+        if error:
+            self.send_json(error[0], error[1])
+            return
+
+        try:
+            params = params_module.build(payload.get("answers"))
+        except params_module.ParamsError as error:
+            self.send_json({"error": str(error), "stage": "параметры"}, 400)
+            return
+
+        built_on = [{"phase": "package", "accepted": True, "override": False,
+                     "score": None, "threshold": None}]
+
+        job_id = jobs.submit(
+            lambda progress: pipeline.run_verdict(params, progress, spec,
+                                                  built_on=built_on))
+        self.send_json({"job_id": job_id, "threshold": pipeline.PASSING_SCORE}, 202)
+
+    @staticmethod
+    def packaged_spec(job_id):
+        """game_spec из завершённой упаковки. Возвращает (спецификация, ошибка).
+
+        Отдельно от accepted_module: у упаковки нет ни аудита, ни балла — её
+        результат не «принят», а просто собран, и искать в нём cleaned_module
+        бессмысленно.
+        """
+        if not job_id:
+            return None, ({"error": "Не указан номер упаковки — разбирать нечего.",
+                           "stage": "цепочка"}, 400)
+
+        state = jobs.status(job_id)
+        if state is None:
+            return None, ({
+                "error": "Упаковка не найдена: сервер перезапускался или "
+                         "результат устарел. Упакуйте игру заново.",
+                "stage": "цепочка"}, 404)
+
+        if state["status"] != jobs.DONE:
+            return None, ({"error": "Упаковка ещё не завершена (%s)."
+                                    % state["status"],
+                           "stage": "цепочка"}, 409)
+
+        spec = (state.get("result") or {}).get("spec")
+        if not ((spec or {}).get("game_spec") or {}).get("core"):
+            return None, ({
+                "error": "В результате упаковки нет game_spec.core. Упакуйте "
+                         "игру заново.",
+                "stage": "цепочка"}, 409)
+
+        return spec, None
 
     @staticmethod
     def _attempts(payload):

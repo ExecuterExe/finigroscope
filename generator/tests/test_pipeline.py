@@ -548,6 +548,77 @@ def test_нехватка_модулей_не_повторяется(monkeypatch
     assert "Правила собрать не удалось" in str(raised.value)
 
 
+# --------------------------------------------------------------------------
+# Итоговый разбор: о чём проход обязан сказать вслух
+# --------------------------------------------------------------------------
+
+def verdict_result(**over):
+    base = {"ok": True, "passed": True, "score": 7.4, "threshold": 6.0,
+            "rounds_made": 1, "rounds_allowed": 3, "code_execution": True,
+            "verdict": "Игра принята.",
+            "rounds": [{"attempt": 1, "score": 7.4, "extra_runs_requested": 0,
+                        "extra_runs_made": False, "extra_runs_skipped": False}],
+            "best": {"attempt": 1, "score": 7.4}}
+    base.update(over)
+    return base
+
+
+def run_verdict(monkeypatch, result, built_on=None):
+    monkeypatch.setattr(pipeline.verdict, "evaluate",
+                        lambda spec, progress=None, wait=None: result)
+    return pipeline.run_verdict(PARAMS, Progress(), {"game_spec": {"core": {}}},
+                                built_on=built_on)
+
+
+def test_незаказанные_прогоны_не_повод_предупреждать(monkeypatch):
+    """Диагносту хватило основного прогона — это норма, а не находка."""
+    out = run_verdict(monkeypatch, verdict_result())
+    assert out["warnings"] == [], out["warnings"]
+
+
+def test_заказанные_но_невыполненные_прогоны_названы(monkeypatch):
+    result = verdict_result(rounds=[{"attempt": 1, "score": 7.4,
+                                     "extra_runs_requested": 4,
+                                     "extra_runs_made": False,
+                                     "extra_runs_skipped": True}])
+    out = run_verdict(monkeypatch, result)
+    assert any("заказано 4" in w for w in out["warnings"])
+
+
+def test_выключенный_прогон_кода_назван(monkeypatch):
+    out = run_verdict(monkeypatch, verdict_result(code_execution=False))
+    assert any("SIM_API_ALLOW_RUN" in w for w in out["warnings"])
+
+
+def test_оборвавшийся_круг_назван(monkeypatch):
+    result = verdict_result(passed=False, score=4.2,
+                            broke_on={"round": 2, "reason": "ядро не сходится"})
+    out = run_verdict(monkeypatch, result)
+    assert any("Круг 2 оборвался" in w for w in out["warnings"])
+
+
+def test_круги_соседа_показаны_попытками(monkeypatch):
+    result = verdict_result(
+        rounds_made=2,
+        rounds=[{"attempt": 1, "score": 4.2, "redesign": {"changes": [1]}},
+                {"attempt": 2, "score": 7.4}])
+    out = run_verdict(monkeypatch, result)
+    assert [a["score"] for a in out["attempts"]] == [4.2, 7.4]
+    assert out["attempts"][0]["title"] == "правка применена"
+    assert out["attempts"][0]["passed"] is False
+    assert out["attempts"][1]["passed"] is True
+
+
+def test_отказ_клиента_доходит_словами(monkeypatch):
+    def broken(spec, progress=None, wait=None):
+        raise pipeline.verdict.VerdictError("ФинИгроСкоп недоступен")
+
+    monkeypatch.setattr(pipeline.verdict, "evaluate", broken)
+    with pytest.raises(pipeline.PipelineError) as error:
+        pipeline.run_verdict(PARAMS, Progress(), {"game_spec": {"core": {}}})
+    assert "недоступен" in str(error.value)
+
+
 def test_проход_механик_помечен_своей_фазой(monkeypatch):
     """По результату должно быть видно, какого этапа он: цепочку строит сервер."""
     Fakes(monkeypatch, [generation(1)], [audit()], [lens(7.0)])

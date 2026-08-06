@@ -1007,7 +1007,8 @@ function renderOutro() {
         '<div class="gen-slot" id="featuresSlot"></div>' +
         '<div class="gen-slot" id="componentsFinalSlot"></div>' +
         '<div class="gen-slot" id="rulesSlot"></div>' +
-        '<div class="gen-slot" id="packageSlot"></div>';
+        '<div class="gen-slot" id="packageSlot"></div>' +
+        '<div class="gen-slot" id="verdictSlot"></div>';
 
     bindConflictJumps(screen);
     screen.querySelectorAll('.res-row').forEach(function(row) {
@@ -1378,6 +1379,7 @@ let featuresJobId = null;
 let featuresPassed = false;
 let rulesJobId = null;
 let rulesPassed = false;
+let packageJobId = null;
 /* Последний собранный game_spec — держим на странице, чтобы кнопка выгрузки
    работала без второго обращения к серверу. */
 let packedSpec = null;
@@ -1480,6 +1482,22 @@ const PACKAGE_PASS = {
     render: function(result) { return packageHtml(result); }
 };
 
+const VERDICT_PASS = {
+    slotId: 'verdictSlot',
+    btnId: 'verdictBtn',
+    url: 'api/pipeline/verdict',
+    busyLabel: 'Идёт разбор...',
+    idleLabel: 'Проверить игру целиком',
+    /* Останавливать нечего: круги авто-редизайна считает ФинИгроСкоп, и наша
+       кнопка «Остановить» прервала бы только наблюдение — работа там всё равно
+       шла бы и тратила деньги. Честнее не показывать кнопку вовсе. */
+    cancellable: false,
+    body: function() {
+        return { answers: answers, package_job_id: packageJobId };
+    },
+    render: function(result) { return verdictHtml(result); }
+};
+
 function runPipeline(hardConflicts) {
     if (piping) return;
 
@@ -1500,7 +1518,8 @@ function runPipeline(hardConflicts) {
     mechanicsJobId = null;
     mechanicsPassed = false;
     clearSlots(['componentsBaseSlot', 'storySlot', 'featuresSlot',
-                'componentsFinalSlot', 'rulesSlot', 'packageSlot']);
+                'componentsFinalSlot', 'rulesSlot', 'packageSlot',
+                'verdictSlot']);
 
     startPass(MECHANICS_PASS);
 }
@@ -1517,7 +1536,7 @@ function runStory() {
     storyJobId = null;
     storyPassed = false;
     clearSlots(['featuresSlot', 'componentsFinalSlot', 'rulesSlot',
-                'packageSlot']);
+                'packageSlot', 'verdictSlot']);
 
     startPass(STORY_PASS);
 }
@@ -1533,7 +1552,7 @@ function runFeatures() {
     /* Особенности пересобираются — прежние правила излагали другую игру. */
     featuresJobId = null;
     featuresPassed = false;
-    clearSlots(['rulesSlot', 'packageSlot']);
+    clearSlots(['rulesSlot', 'packageSlot', 'verdictSlot']);
 
     startPass(FEATURES_PASS);
 }
@@ -1549,7 +1568,7 @@ function runRules() {
     rulesJobId = null;
     rulesPassed = false;
     packedSpec = null;
-    clearSlots(['packageSlot']);
+    clearSlots(['packageSlot', 'verdictSlot']);
 
     startPass(RULES_PASS);
 }
@@ -1561,7 +1580,21 @@ function runPackage() {
                     'Упаковка ничего не создаёт — она сводит готовое.');
         return;
     }
+    /* Игра пересобирается — прежний разбор относился к другой спецификации. */
+    packageJobId = null;
+    clearSlots(['verdictSlot']);
+
     startPass(PACKAGE_PASS);
+}
+
+function runVerdict() {
+    if (piping) return;
+    if (!packageJobId) {
+        missingBase('verdictSlot', 'упакованная игра',
+                    'Разбор идёт по game_spec, который собирает упаковка.');
+        return;
+    }
+    startPass(VERDICT_PASS);
 }
 
 function clearSlots(ids) {
@@ -1657,6 +1690,7 @@ function passPoll(pass, jobId, started) {
                         rulesPassed = !!body.result.passed;
                     } else if (pass === PACKAGE_PASS) {
                         packedSpec = body.result.spec || null;
+                        packageJobId = jobId;
                     }
                 }
                 passStop(pass, pass.render(body.result));
@@ -1677,8 +1711,8 @@ function passPoll(pass, jobId, started) {
                 bindPassRetry(pass);
                 return;
             }
-            slot.innerHTML = pipeWaitHtml(body, started);
-            bindPipeCancel(slot, jobId);
+            slot.innerHTML = pipeWaitHtml(body, started, pass.cancellable !== false);
+            if (pass.cancellable !== false) bindPipeCancel(slot, jobId);
             setTimeout(ask, 2000);
         }).catch(function(e) {
             passStop(pass, lensFailHtml({ error: 'Сервер не ответил: ' + e.message }));
@@ -1689,7 +1723,7 @@ function passPoll(pass, jobId, started) {
     ask();
 }
 
-function pipeWaitHtml(state, started) {
+function pipeWaitHtml(state, started, cancellable) {
     const whole = Math.round((Date.now() - started) / 1000);
     const total = state.attempts_total || 3;
     const now = state.attempt || 1;
@@ -1719,12 +1753,20 @@ function pipeWaitHtml(state, started) {
         html += pipeAttemptsTable(state.attempts);
     }
 
-    html += '<div class="lens-retry-row">' +
-        '<button class="btn ghost small" type="button" id="pipeCancel">' +
-            'Остановить</button>' +
-        '<span class="compat-hint">Остановится после текущего обращения к ' +
-            'модели — прервать сам запрос нельзя, он уже отправлен.</span>' +
-    '</div></div>';
+    /* Кнопки отмены нет там, где отменять нечего: работа идёт в соседнем
+       сервисе, и прерывание остановило бы только наблюдение за ней. */
+    html += cancellable
+        ? '<div class="lens-retry-row">' +
+              '<button class="btn ghost small" type="button" id="pipeCancel">' +
+                  'Остановить</button>' +
+              '<span class="compat-hint">Остановится после текущего обращения ' +
+                  'к модели — прервать сам запрос нельзя, он уже отправлен.' +
+              '</span>' +
+          '</div>'
+        : '<p class="compat-hint">Работа идёт в ФинИгроСкопе. Остановить её ' +
+              'отсюда нельзя: прерывание закрыло бы только наблюдение, а разбор ' +
+              'всё равно продолжился бы и был бы оплачен.</p>';
+    html += '</div>';
 
     return html;
 }
@@ -1968,8 +2010,92 @@ function packageHtml(result) {
         '<pre class="json-preview">' + esc(JSON.stringify(core, null, 2)) +
         '</pre></details>';
 
+    /* Последний шаг: игра уходит в ФинИгроСкоп целиком. Экранов у него нет —
+       он идёт сам и возвращает балл. */
+    html += '<div class="lens-retry-row">' +
+        '<button class="btn" type="button" id="verdictBtn">' +
+            'Проверить игру целиком</button>' +
+        '<span class="compat-hint">ФинИгроСкоп соберёт симулятор, прогонит ' +
+            'партии, оценит баланс, разберёт по 50 тестам методички и 47 линзам ' +
+            'Шелла и выведет итоговый балл. Это самый долгий шаг конвейера</span>' +
+    '</div>';
+
     html += '</div>';
     return html;
+}
+
+/* ---------- итоговый разбор в ФинИгроСкопе ---------- */
+
+function verdictHtml(result) {
+    if (!result || !result.ok) {
+        return genErrorHtml(result || { error: 'Пустой результат' });
+    }
+
+    const passed = result.passed;
+    const score = result.score;
+
+    let html = '<div class="pipe">' +
+        '<div class="pipe-head">' +
+            '<span class="badge' + (passed ? ' success' : '') + '">' +
+                (passed ? 'Игра принята' : 'Лучшее из полученного') +
+            '</span>' +
+            '<h3 class="gen-title">Итоговый балл ' +
+                '<b class="' + (passed ? 'pipe-ok' : 'pipe-low') + '">' +
+                    (score === null || score === undefined ? '—' : esc(score)) +
+                '</b> из 10' +
+                (result.threshold !== undefined && result.threshold !== null
+                    ? ' <span class="lens-clock">порог ' + esc(result.threshold) +
+                      '</span>' : '') +
+            '</h3>' +
+            '<p class="gen-note">' + esc(result.verdict || '') + '</p>' +
+        '</div>';
+
+    html += builtOnHtml(result.built_on);
+    html += otherWarningsHtml(result);
+
+    /* Круги авто-редизайна: их считает ФинИгроСкоп, а показываем мы той же
+       таблицей, что и попытки остальных этапов. */
+    if ((result.attempts || []).length > 1) {
+        html += pipeAttemptsTable(result.attempts);
+    }
+
+    html += verdictBreakdownHtml(result.best || {});
+
+    html += '</div>';
+    return html;
+}
+
+function verdictBreakdownHtml(round) {
+    if (!round || !round.synthesis) return '';
+
+    const synthesis = round.synthesis || {};
+    let html = '<div class="story-card">';
+
+    const priorities = synthesis.top_priorities || [];
+    if (priorities.length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Что чинить в первую очередь</span>' +
+            '<ol class="story-list rules-steps">' +
+            priorities.map(function(p) {
+                return '<li>' + esc(typeof p === 'string' ? p
+                    : (p.text || p.title || JSON.stringify(p))) + '</li>';
+            }).join('') + '</ol></div>';
+    }
+
+    html += categoriesHtml(round);
+
+    /* Покрытие показываем всегда, когда оно есть: балл без доли проверенного
+       выглядит одинаково и у полной проверки, и у почти пустой. */
+    const coverage = round.coverage;
+    if (coverage) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Покрытие проверками</span>' +
+            '<p>' + esc(Object.keys(coverage).map(function(k) {
+                return k + ': ' + coverage[k];
+            }).join(' · ')) + '</p></div>';
+    }
+
+    return html + '</div>';
 }
 
 /* Маленький разбор того, что собрал сам код: заголовки списков, пункты и
@@ -2329,6 +2455,45 @@ function storyCardHtml(variant) {
     return html + '</div>';
 }
 
+/* Баллы категорий берутся из ЭТАЛОННОГО расчёта синтезатора, а не из отчёта
+   линз. Разница не косметическая: в эталон уже внесены штрафы диагноста и
+   пересчитана «Экономика и баланс» — именно из этих чисел сложился итоговый
+   балл, и показывать рядом с ним другие значит показывать не то, что считалось.
+
+   Первая версия читала у линз поле `score`, которого там нет вовсе (категории
+   несут `category_avg_preliminary`), и вся таблица молча показывала «N/A» —
+   ровно та ошибка, от которой сервис защищается везде: число выглядит
+   осмысленным, а означает другое. */
+function categoriesHtml(round) {
+    const scored = ((round.reference || {}).category_scores) || {};
+    const names = Object.keys(scored);
+
+    let rows = names.map(function(name) {
+        const value = scored[name] && scored[name].score;
+        return { name: name, score: value };
+    });
+
+    /* Категории, до которых оценка не дошла, обязаны быть видны: непокрытое —
+       это не то же самое, что оценённое низко. */
+    ((round.lenses || {}).categories || []).forEach(function(c) {
+        if (!c.name || names.indexOf(c.name) !== -1) return;
+        rows.push({ name: c.name, score: null,
+                    note: c.na ? 'нечем оценивать' : 'не вошла в балл' });
+    });
+
+    if (!rows.length) return '';
+
+    return '<div class="story-field">' +
+        '<span class="story-label">Оценка по категориям</span>' +
+        '<table class="lens-table"><tbody>' +
+        rows.map(function(r) {
+            const value = (r.score === null || r.score === undefined)
+                ? '<i class="cat-na">' + esc(r.note || 'N/A') + '</i>'
+                : esc(r.score);
+            return '<tr><td>' + esc(r.name) + '</td><td>' + value + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+}
+
 function bindNextStage() {
     const story = document.getElementById('storyBtn');
     if (story) story.onclick = function() { runStory(); };
@@ -2336,6 +2501,8 @@ function bindNextStage() {
     if (feat) feat.onclick = function() { runFeatures(); };
     const rules = document.getElementById('rulesBtn');
     if (rules) rules.onclick = function() { runRules(); };
+    const verd = document.getElementById('verdictBtn');
+    if (verd) verd.onclick = function() { runVerdict(); };
     const pack = document.getElementById('packageBtn');
     if (pack) pack.onclick = function() { runPackage(); };
 }
@@ -2362,7 +2529,9 @@ function bindPassRetry(pass) {
     button.onclick = function() {
         button.disabled = true;
         button.textContent = 'Повторяю...';
-        if (pass === PACKAGE_PASS) {
+        if (pass === VERDICT_PASS) {
+            runVerdict();
+        } else if (pass === PACKAGE_PASS) {
             runPackage();
         } else if (pass === RULES_PASS) {
             runRules();

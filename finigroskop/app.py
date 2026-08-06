@@ -51,6 +51,7 @@ from models import (
 )
 from review import diagnost as diagnost_agent
 from review import extractor as extractor_agent
+from review import headless
 from review import lens_evaluator as lens_agent
 from review import lens_module, lens_queue
 from review import llm_provider, llm_settings
@@ -364,8 +365,8 @@ def lens_module_submit():
 
     provider = payload.get("provider") if isinstance(payload.get("provider"), str) else None
     job_id = lens_queue.submit(
-        lambda: lens_module.evaluate(phase, module, params, audit,
-                                     provider_name=provider))
+        lambda progress: lens_module.evaluate(phase, module, params, audit,
+                                              provider_name=provider))
     # Бюджет отдаём вместе с номером задачи. Он нужен вызывающему, чтобы
     # соразмерить своё ожидание: генератор, сдавшийся раньше, чем оценщик
     # закончил, показывает ошибку по несуществующему поводу, а работа при этом
@@ -387,6 +388,78 @@ def lens_module_status(job_id):
     if state is None:
         return jsonify({"error": "Задача не найдена — возможно, сервис "
                                  "перезапускался. Запросите оценку заново."}), 404
+    return jsonify(state)
+
+
+# --- симуляционный этап по готовому game_spec, без экранов -------------------
+# Через эти два маршрута сгенерированная игра проходит весь разбор целиком:
+# симуляционист → прогон → баланс → диагност → линзы → синтез → авто-редизайн.
+# Экранов нет: для «Генератора игр» это внутренний шаг, а не работа автора.
+
+# Прогон скелета — единственное место сервиса, где выполняется код, написанный
+# моделью. В интерфейсе он закрыт явным нажатием человека; здесь нажимать
+# некому, поэтому включается отдельной переменной и по умолчанию ВЫКЛЮЧЕН.
+# Автоматическое выполнение чужого кода по сетевому запросу — это удалённое
+# выполнение кода с правами сервиса, и включать его молча нельзя.
+SIM_API_ALLOW_RUN = os.environ.get("SIM_API_ALLOW_RUN", "").strip() in (
+    "1", "true", "yes", "on")
+
+
+@app.route("/api/simulate/spec", methods=["POST"])
+def simulate_spec_submit():
+    """Ставит разбор игры в очередь. Отвечает сразу, не дожидаясь агентов.
+
+    Вход: {game_spec: {...}, diagnostic_meta: {...}} — то, что собирает упаковка
+    генератора. Ждать внутри запроса нельзя: цепочка идёт минутами и делает
+    до полутора десятков обращений к моделям.
+    """
+    denied = _lens_api_denied()
+    if denied:
+        return jsonify({"error": denied}), 403
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Ожидается объект JSON."}), 400
+
+    spec_root = payload.get("spec") if isinstance(payload.get("spec"), dict) else payload
+    if not headless.core_of(spec_root):
+        return jsonify({"error": "В запросе нет game_spec.core — разбирать нечего. "
+                                 "Ожидается результат упаковки генератора."}), 400
+
+    allow_run = SIM_API_ALLOW_RUN and bool(payload.get("run_code", True))
+    provider = payload.get("provider") if isinstance(payload.get("provider"), str) else None
+
+    # Длинная полоса. Разбор идёт десятки минут, и пускать его в общую очередь
+    # с оценками модулей нельзя: те встают за ним намертво, а генератор
+    # сообщает «оценка не уложилась» при полностью исправном сервисе.
+    job_id = lens_queue.submit(
+        lambda progress: headless.run(spec_root, progress=progress,
+                                      allow_code_run=allow_run,
+                                      provider_name=provider),
+        lane=lens_queue.LONG)
+    return jsonify({
+        "job_id": job_id,
+        "code_execution": allow_run,
+        # Говорим прямо, а не молчим: без прогона цепочка остановится на
+        # статистике, и лучше узнать об этом сейчас, чем через минуту.
+        "note": None if allow_run else
+                "Прогон скелета выключен (SIM_API_ALLOW_RUN). Разбор дойдёт до "
+                "шага статистики и остановится.",
+        "status_url": url_for("simulate_spec_status", job_id=job_id),
+    }), 202
+
+
+@app.route("/api/simulate/<job_id>.json")
+def simulate_spec_status(job_id):
+    """Состояние разбора. Генератор опрашивает, пока идёт."""
+    denied = _lens_api_denied()
+    if denied:
+        return jsonify({"error": denied}), 403
+
+    state = lens_queue.status(job_id)
+    if state is None:
+        return jsonify({"error": "Задача не найдена — возможно, сервис "
+                                 "перезапускался. Запустите разбор заново."}), 404
     return jsonify(state)
 
 

@@ -31,9 +31,33 @@ RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
 
-# Одновременно считаемых оценок. Двух достаточно: вызовы почти всё время ждут
-# ответа модели, а не занимают процессор.
-MAX_WORKERS = 2
+# ДВЕ ПОЛОСЫ, а не один пул на всех, и это не запас прочности.
+#
+# Через эту очередь идут две работы с несопоставимой длительностью: оценка
+# модуля по линзам укладывается в свой бюджет (lens_evaluator.TOTAL_BUDGET =
+# 300 с), а итоговый разбор игры — это до трёх кругов по шесть агентов, то есть
+# десятки минут. Пока пул был общим и двухместным, двух запущенных разборов
+# хватало, чтобы КАЖДАЯ следующая оценка модуля встала в очередь намертво.
+#
+# Снаружи это выглядело хуже всего: генератор ждёт свои 360 секунд, не
+# дожидается и сообщает «оценка не уложилась» — при полностью исправном
+# ФинИгроСкопе, который в этот момент занят совсем другой работой. Ни по
+# сообщению, ни по журналу связать одно с другим нельзя.
+#
+# Полосы не делят места между собой: короткая работа не ждёт длинную никогда.
+SHORT = "short"
+LONG = "long"
+
+LANE_WORKERS = {
+    # Оценки модулей: их заказывает конвейер генератора, они частые и короткие.
+    SHORT: 2,
+    # Итоговые разборы: редкие, очень долгие. Одного места достаточно — второй
+    # разбор всё равно упрётся в лимиты провайдера, а очередь станет честной.
+    LONG: 1,
+}
+
+# Прежнее имя оставлено: на него смотрят проверки и внешний код.
+MAX_WORKERS = LANE_WORKERS[SHORT]
 
 # Сколько держать завершённую задачу, прежде чем забыть. Генератор забирает
 # результат сразу после готовности; полчаса — запас на перезагрузку его вкладки.
@@ -41,15 +65,21 @@ TTL_SECONDS = 30 * 60
 
 _lock = threading.Lock()
 _jobs = {}
-_pool = None
+_pools = {}
+
+# Порядковый номер заявки. Считать очередь по времени создания нельзя: на
+# Windows шаг системных часов около 15 мс, и две заявки подряд получают
+# ОДИНАКОВУЮ метку — «сколько впереди» превращалось в ноль там, где впереди
+# была чужая работа. Счётчик к тому же не боится перевода часов.
+_sequence = 0
 
 
-def _ensure_pool():
-    global _pool
-    if _pool is None:
-        _pool = ThreadPoolExecutor(max_workers=MAX_WORKERS,
-                                   thread_name_prefix="lens-module")
-    return _pool
+def _ensure_pool(lane):
+    if lane not in _pools:
+        _pools[lane] = ThreadPoolExecutor(
+            max_workers=LANE_WORKERS[lane],
+            thread_name_prefix="lens-%s" % lane)
+    return _pools[lane]
 
 
 def _forget_old(now=None):
@@ -62,18 +92,114 @@ def _forget_old(now=None):
         _jobs.pop(job_id, None)
 
 
-def submit(fn) -> str:
-    """Ставит оценку в очередь и сразу возвращает её идентификатор.
+class Progress(object):
+    """То, через что задача рассказывает о себе, пока идёт.
 
-    `fn` — функция без аргументов, возвращающая словарь результата.
+    Понадобилось не сразу. Оценка по линзам — ОДИН шаг, и «идёт» про неё
+    исчерпывающий ответ. Разбор игры целиком — шесть шагов, повторяемых до трёх
+    кругов; «идёт» про него бесполезно: спрашивающий не знает, дошло ли дело до
+    диагноста или всё ещё считаются партии, и через пять минут не может отличить
+    работу от зависания.
+
+    Передаётся в саму работу отдельным объектом, а не через глобальную ссылку:
+    так цепочку можно прогнать в проверке с заглушкой и увидеть ровно ту
+    последовательность шагов, которую она сообщает.
     """
+
+    def __init__(self, job_id):
+        self.job_id = job_id
+
+    def say(self, step, detail=None):
+        with _lock:
+            record = _jobs.get(self.job_id)
+            if record is None:
+                return
+            record["step"] = step
+            record["detail"] = detail
+            record["step_started"] = time.time()
+
+    def check_cancelled(self):
+        """Отмены здесь нет, и делать вид, что есть, не надо.
+
+        Работа идёт по запросу соседнего сервиса, а не человека за экраном:
+        отменять некому и незачем. Метод существует, чтобы цепочка не знала,
+        в какой очереди её запустили, — у неё один и тот же контракт прогресса.
+        """
+        return None
+
+
+def submit(fn, lane=SHORT) -> str:
+    """Ставит задачу в очередь и сразу возвращает её идентификатор.
+
+    `fn` — функция ОДНОГО аргумента: ей передаётся Progress собственной задачи.
+    Коротким задачам он не нужен (принимают и игнорируют), длинным — необходим.
+
+    `lane` — какого рода работа. SHORT (по умолчанию) — оценка модуля, LONG —
+    итоговый разбор игры. Полосы не делят места: см. пояснение к LANE_WORKERS.
+    """
+    if lane not in LANE_WORKERS:
+        raise ValueError("Неизвестная полоса очереди: %r" % (lane,))
+
+    global _sequence
     job_id = uuid.uuid4().hex[:16]
     with _lock:
         _forget_old()
+        _sequence += 1
         _jobs[job_id] = {"status": QUEUED, "result": None, "error": None,
-                         "created_at": time.time(), "finished_at": None}
-    _ensure_pool().submit(_execute, job_id, fn)
+                         "lane": lane, "seq": _sequence,
+                         "step": "в очереди", "detail": None,
+                         "created_at": time.time(), "step_started": time.time(),
+                         "finished_at": None}
+    _ensure_pool(lane).submit(_execute, job_id, fn)
     return job_id
+
+
+def waiting_ahead(job_id):
+    """Сколько задач ЭТОЙ ЖЕ полосы встали в очередь раньше и ещё не закончили.
+
+    Нужно спрашивающему: «в очереди» без числа не отличить от «висит». Пока
+    полоса была общей, именно этой цифры и не хватало, чтобы понять, что оценка
+    не идёт не из-за сбоя, а потому что впереди чужая долгая работа.
+    """
+    with _lock:
+        record = _jobs.get(job_id)
+        if record is None or record["status"] != QUEUED:
+            return 0
+        return sum(1 for other in _jobs.values()
+                   if other is not record
+                   and other["lane"] == record["lane"]
+                   and other["status"] in (QUEUED, RUNNING)
+                   and other["seq"] < record["seq"])
+
+
+# Как назвать работу в сообщении об ошибке. Через очередь идут две разные вещи,
+# и «Оценка по линзам не выполнена» на упавшем разборе игры — прямая ложь.
+LANE_TITLES = {SHORT: "Оценка по линзам", LONG: "Итоговый разбор"}
+
+
+def describe_failure(failure, lane=SHORT):
+    """Что отдать наружу вместо упавшей задачи.
+
+    По умолчанию — только ТИП ошибки: в тексте случайного исключения может
+    оказаться кусок промпта, путь на диске или настройка.
+
+    Но часть ошибок пишется ДЛЯ ЧЕЛОВЕКА и помечает себя `user_facing = True`
+    (HeadlessError, а на стороне генератора — PipelineError и LensError). Их
+    текст обязан дойти целиком. Пока метка здесь не читалась, объяснение
+    «Прогон скелета не разрешён… SIM_API_ALLOW_RUN=1 в окружении» подменялось
+    строкой «не выполнена: HeadlessError» — то есть единственная подсказка, как
+    это починить, до автора не доезжала.
+
+    Основание ровно одно — метка. Догадываться по виду строки нельзя:
+    RuntimeError("секрет-из-промпта") тоже короток и однострочен.
+    """
+    text = str(failure).strip()
+    if getattr(failure, "user_facing", False) and text:
+        return text
+    return "%s не выполнен%s: %s" % (
+        LANE_TITLES.get(lane, LANE_TITLES[SHORT]),
+        "" if lane == LONG else "а",
+        type(failure).__name__)
 
 
 def _execute(job_id: str, fn):
@@ -82,6 +208,7 @@ def _execute(job_id: str, fn):
         if record is None:          # успели забыть — считать незачем
             return
         record["status"] = RUNNING
+        lane = record["lane"]
 
     # В консоль — потому что оценка идёт минутами, и без этих двух строк
     # непонятно, работает сервис или завис. Ровно этот вопрос и возник на
@@ -90,18 +217,16 @@ def _execute(job_id: str, fn):
     print("[линзы] %s: начал" % job_id, flush=True)
 
     try:
-        result = fn()
+        result = fn(Progress(job_id))
         status, error = DONE, None
         print("[линзы] %s: готово за %.0f с" % (job_id, time.time() - started),
               flush=True)
     except Exception as failure:                     # noqa: BLE001
         print("[линзы] %s: упал за %.0f с — %s"
               % (job_id, time.time() - started, type(failure).__name__), flush=True)
-        # Текст исключения наружу не отдаём: в нём может оказаться кусок
-        # промпта или настроек. В журнал — полностью, наружу — коротко.
         traceback.print_exc()
         result, status = None, FAILED
-        error = "Оценка по линзам не выполнена: %s" % type(failure).__name__
+        error = describe_failure(failure, lane)
 
     with _lock:
         record = _jobs.get(job_id)
@@ -118,7 +243,18 @@ def status(job_id: str):
         if record is None:
             return None
         out = {"job_id": job_id, "status": record["status"],
+               "lane": record["lane"],
+               "step": record.get("step"), "detail": record.get("detail"),
+               "elapsed": round(time.time() - record["created_at"], 1),
                "error": record["error"]}
+        if record["status"] == QUEUED:
+            # Сколько чужой работы впереди. Без этого числа «в очереди» и
+            # «висит» для спрашивающего выглядят одинаково.
+            out["waiting_ahead"] = sum(
+                1 for other in _jobs.values()
+                if other is not record and other["lane"] == record["lane"]
+                and other["status"] in (QUEUED, RUNNING)
+                and other["seq"] < record["seq"])
         if record["status"] == DONE:
             out["result"] = record["result"]
         return out

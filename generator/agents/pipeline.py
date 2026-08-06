@@ -38,6 +38,7 @@ from agents import module_auditor
 from agents import packaging
 from agents import rules
 from agents import story
+from agents import verdict
 
 # Сколько раз пробуем собрать модуль, дотягивающий до порога.
 MAX_ATTEMPTS = 3
@@ -230,6 +231,81 @@ def run_packaging(params, progress, modules, components, rules_variant,
         "warnings": _built_on_warnings(built_on) + list(out.get("warnings") or []),
     })
     return out
+
+
+def run_verdict(params, progress, spec_root, built_on=None):
+    """Итоговый разбор упакованной игры в ФинИгроСкопе. Последний шаг конвейера.
+
+    Своих попыток здесь нет и быть не может: круги авто-редизайна считает та
+    сторона, потому что правит она же — game_spec. Повторять их отсюда значило
+    бы завести второй счётчик тех же попыток, и они разошлись бы.
+    """
+    progress.check_cancelled()
+    progress.say("итоговый разбор", attempt=1, attempts_total=1,
+                 detail="ФинИгроСкоп проводит игру через симуляционный этап")
+
+    try:
+        out = verdict.evaluate(spec_root, progress=progress)
+    except verdict.VerdictError as error:
+        raise PipelineError(str(error)) from error
+
+    if not out.get("ok"):
+        raise PipelineError("Итоговый разбор не выполнен: %s"
+                            % (out.get("error") or "причина не названа"))
+
+    out.update({
+        "phase": "verdict",
+        "scored": True,
+        "built_on": built_on,
+        # Круги того сервиса показываем как свои попытки — счётчик один и тот же,
+        # просто считает его сосед.
+        "attempts_made": out.get("rounds_made"),
+        "attempts_allowed": out.get("rounds_allowed"),
+        "attempts": [_verdict_round(r) for r in out.get("rounds") or []],
+        "warnings": _built_on_warnings(built_on) + _verdict_warnings(out),
+    })
+    return out
+
+
+def _verdict_round(row):
+    """Круг разбора строкой для таблицы попыток — тем же ключом, что у проходов."""
+    return {
+        "attempt": row.get("attempt"),
+        "ok": row.get("score") is not None,
+        "stage": "разбор",
+        "title": ("правка применена" if row.get("redesign")
+                  else "круг без правок"),
+        "score": row.get("score"),
+        "passed": (row.get("score") or 0) >= PASSING_SCORE,
+        "reason": None,
+    }
+
+
+def _verdict_warnings(out):
+    """О чём разбор обязан сказать вслух."""
+    notes = []
+    if out.get("code_execution") is False:
+        notes.append(
+            "Прогон скелета в ФинИгроСкопе выключен (SIM_API_ALLOW_RUN), поэтому "
+            "статистику никто не считал. Это не сбой, а настройка — но балл без "
+            "неё неполон.")
+    # Предупреждаем только когда прогоны БЫЛИ заказаны и не выполнены. Первая
+    # версия смотрела на «выполнены ли» и ругалась там, где диагносту просто
+    # хватило основного прогона, — то есть в большинстве обычных случаев.
+    skipped = sum((row.get("extra_runs_requested") or 0)
+                  for row in out.get("rounds") or []
+                  if row.get("extra_runs_skipped"))
+    if skipped:
+        notes.append(
+            "Дополнительных прогонов заказано %d, и они не выполнялись — их "
+            "тесты получили честное «не выполнен», а не пропали из отчёта."
+            % skipped)
+
+    broke = out.get("broke_on")
+    if broke:
+        notes.append("Круг %d оборвался: %s Показан лучший из завершённых."
+                     % (broke.get("round"), broke.get("reason")))
+    return notes
 
 
 def _run_module(phase, step_label, step_detail, generate, fatal, params,
