@@ -2397,57 +2397,98 @@ function mechanicsCardHtml(variant) {
     const steps = loop.turn_structure || [];
     const check = loop.success_check || {};
 
+    /* Разделы — по Приложению А ТЗ, а не по полям ответа агента. Этап 2 обязан
+       выдать ровно четыре: «Жанр и механики игры», «Артефакты» (без количества
+       и материалов), «Условия победы», «Элементы случайности».
+
+       Раньше здесь вываливался модуль как есть: артефакты терялись в строке
+       «Кратко», а «Как игра помогает отстающим» — раздел ЭТАПА 4 — стоял среди
+       разделов этапа 2 и выглядел как готовая часть описания, хотя до него ещё
+       два этапа. Рабочие поля агента (обоснование, риски, оценки) в описание
+       игры не входят вовсе — они уехали в свёрнутый блок ниже. */
     let html = '<div class="story-card">' +
-        '<div class="story-name">' + esc(variant.title) + '</div>';
+        '<div class="story-name">' + esc(variant.title) + '</div>' +
+        '<p class="story-hint">Первые разделы описания игры. Остальные ' +
+            'добавят следующие этапы: название и сюжет, концепцию и ' +
+            'особенности, количество компонентов, правила.</p>';
 
-    if ((variant.core_mechanics || []).length) {
-        html += '<div class="variant-mech">' +
-            variant.core_mechanics.map(function(m) {
-                return '<span class="chip">' + esc(m.id || '') +
-                    (m.role ? ' — ' + esc(m.role) : '') + '</span>';
-            }).join('') + '</div>';
-    }
-
+    // --- 1. Жанр и механики игры ---
+    let loopParts = '';
     if (steps.length) {
-        html += '<div class="story-field">' +
-            '<span class="story-label">Ход игрока</span><ol class="story-list">' +
+        loopParts += '<div class="section-part"><b>Ход игрока</b><ol class="story-list">' +
             steps.map(function(s) { return '<li>' + esc(s) + '</li>'; }).join('') +
             '</ol></div>';
     }
-
     if (check.rule || check.type) {
-        html += '<div class="story-field">' +
-            '<span class="story-label">Проверка успеха</span><p>' +
+        loopParts += '<div class="section-part"><b>Проверка успеха</b><p>' +
             esc([check.type, check.rule].filter(Boolean).join(': ')) + '</p>' +
             ((check.outcomes || []).length
                 ? '<ul class="story-list">' + check.outcomes.map(function(o) {
                       return '<li>' + esc(o) + '</li>';
                   }).join('') + '</ul>'
-                : '') +
+                : '') + '</div>';
+    }
+    [['turn_order', 'Передача хода'],
+     ['resource_flow', 'Движение ресурсов'],
+     ['progression', 'Как партия движется к концу']].forEach(function(f) {
+        if (!loop[f[0]]) return;
+        loopParts += '<div class="section-part"><b>' + f[1] + '</b><p>' +
+            esc(loop[f[0]]) + '</p></div>';
+    });
+    if (loopParts) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Жанр и механики игры</span>' +
+            loopParts + '</div>';
+    }
+
+    // --- 2. Артефакты (без количества и материалов) ---
+    if ((variant.required_component_types || []).length) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Артефакты</span>' +
+            '<ul class="story-list">' +
+            variant.required_component_types.map(function(c) {
+                return '<li>' + esc(c) + '</li>';
+            }).join('') + '</ul>' +
+            '<p class="story-hint">Без количества и материалов — их посчитает ' +
+                'программа по таблицам, а названия даст сюжет.</p></div>';
+    }
+
+    // --- 3. Условия победы ---
+    const win = (variant.win_condition || {}).description;
+    const lose = (variant.lose_condition || {}).description;
+    if (win || lose) {
+        html += '<div class="story-field">' +
+            '<span class="story-label">Условия победы</span>' +
+            (win ? '<p>' + esc(win) + '</p>' : '') +
+            (lose ? '<div class="section-part"><b>Поражение</b><p>' +
+                    esc(lose) + '</p></div>' : '') +
             '</div>';
     }
 
-    [['turn_order', 'Передача хода', loop],
-     ['resource_flow', 'Движение ресурсов', loop],
-     ['progression', 'Как партия движется к концу', loop]].forEach(function(f) {
-        const value = f[2][f[0]];
-        if (!value) return;
+    // --- 4. Элементы случайности ---
+    if (variant.randomness_role) {
         html += '<div class="story-field">' +
-            '<span class="story-label">' + f[1] + '</span>' +
-            '<p>' + esc(value) + '</p></div>';
-    });
+            '<span class="story-label">Элементы случайности</span>' +
+            '<p>' + esc(variant.randomness_role) + '</p></div>';
+    }
 
-    [[(variant.win_condition || {}).description, 'Условие победы'],
-     [(variant.lose_condition || {}).description, 'Условие поражения'],
-     [variant.catch_up_mechanism, 'Как игра помогает отстающим'],
-     [variant.randomness_role, 'Роль случайности'],
-     [variant.fit_rationale, 'Почему подходит под ваши ответы']].forEach(function(f) {
-        if (!f[0]) return;
-        html += '<div class="story-field">' +
-            '<span class="story-label">' + f[1] + '</span>' +
-            '<p>' + esc(f[0]) + '</p></div>';
-    });
-
+    /* Рабочие сведения модуля. В описание игры они не входят: это то, чем
+       агент обосновывал свой выбор, и то, что понадобится следующим этапам. */
+    let service = '';
+    if ((variant.core_mechanics || []).length) {
+        service += '<div class="section-part"><b>Механики из библиотеки</b>' +
+            '<div class="variant-mech">' +
+            variant.core_mechanics.map(function(m) {
+                return '<span class="chip">' + esc(m.id || '') +
+                    (m.role ? ' — ' + esc(m.role) : '') + '</span>';
+            }).join('') + '</div></div>';
+    }
+    if (variant.catch_up_mechanism) {
+        service += '<div class="section-part"><b>Задел на помощь отстающим</b>' +
+            '<p>' + esc(variant.catch_up_mechanism) + '</p>' +
+            '<p class="story-hint">Отдельным разделом описания это станет на ' +
+                'этапе особенностей — здесь только задел в механике.</p></div>';
+    }
     const facts = [];
     if (variant.estimated_duration_minutes) {
         facts.push('партия ~' + esc(variant.estimated_duration_minutes) + ' мин');
@@ -2455,23 +2496,24 @@ function mechanicsCardHtml(variant) {
     if (variant.estimated_turns_per_player) {
         facts.push('ходов на игрока ~' + esc(variant.estimated_turns_per_player));
     }
-    if ((variant.required_component_types || []).length) {
-        facts.push('компоненты: ' + esc(variant.required_component_types.join(', ')));
-    }
     if (facts.length) {
-        html += '<div class="story-field">' +
-            '<span class="story-label">Кратко</span>' +
-            '<p>' + facts.join(' · ') + '</p></div>';
+        service += '<div class="section-part"><b>Оценки агента</b><p>' +
+            facts.join(' · ') + '</p></div>';
     }
-
-    /* Риски показываем вместе с модулем, а не прячем в разбор: это то, что
-       автор должен прочитать до того, как строить поверх сюжет. */
+    if (variant.fit_rationale) {
+        service += '<div class="section-part"><b>Почему подходит под ваши ответы' +
+            '</b><p>' + esc(variant.fit_rationale) + '</p></div>';
+    }
     if ((variant.risks || []).length) {
-        html += '<div class="story-field">' +
-            '<span class="story-label">Риски</span><ul class="story-list">' +
+        service += '<div class="section-part"><b>Риски</b><ul class="story-list">' +
             variant.risks.map(function(r) {
                 return '<li>' + esc(r) + '</li>';
             }).join('') + '</ul></div>';
+    }
+    if (service) {
+        html += '<details class="story-service"><summary>Рабочие сведения ' +
+            'модуля: механики библиотеки, оценки, риски</summary>' +
+            service + '</details>';
     }
 
     return html + '</div>';

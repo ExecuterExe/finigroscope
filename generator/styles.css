@@ -851,6 +851,37 @@ body.nav-open {
     margin-bottom: 4px;
 }
 
+/* Подраздел внутри раздела описания. Разделы названы по Приложению А, а внутри
+   у них своя разбивка — она должна читаться как часть раздела, а не спорить с
+   ним за уровень. */
+.section-part {
+    margin: 8px 0 10px;
+}
+
+.section-part > b {
+    display: block;
+    margin-bottom: 3px;
+    font-size: 13px;
+    color: var(--text);
+}
+
+.section-part p {
+    margin: 0;
+}
+
+/* Рабочие сведения агента: в описание игры не входят, поэтому свёрнуты. */
+.story-service {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--card-border);
+}
+
+.story-service > summary {
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 12px;
+}
+
 .pipe-ok { color: var(--accent); }
 .pipe-low { color: #f8b26a; }
 
