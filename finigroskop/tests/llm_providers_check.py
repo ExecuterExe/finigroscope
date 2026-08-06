@@ -183,7 +183,15 @@ checks["gemini: ответ разобран"] = resp.available and resp.text == 
 # --- 8) приоритеты выбора провайдера ------------------------------------------
 llm_settings.clear()
 os.environ.pop("LLM_PROVIDER", None)
-checks["без настроек -> null"] = resolve_provider_name()[0] == "null"
+# Умолчание изменено сознательно: ФинИгроСкоп перестал быть отдельным сервисом,
+# и первый же запрос от «Генератора игр» упирался в «ИИ выключен», пока человек
+# не сходит в настройки. Ключ этим не подменяется — без него провайдер честно
+# назовёт недостающую переменную.
+checks["без настроек -> openrouter"] = resolve_provider_name()[0] == "openrouter"
+from review import llm_provider as _lp  # noqa: E402
+
+checks["умолчание названо одним местом"] = (
+    resolve_provider_name()[0] == _lp.DEFAULT_PROVIDER)
 
 os.environ["LLM_PROVIDER"] = "gemini"
 checks[".env даёт провайдера"] = resolve_provider_name()[0] == "gemini"
