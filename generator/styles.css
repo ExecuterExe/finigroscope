@@ -851,6 +851,99 @@ body.nav-open {
     margin-bottom: 4px;
 }
 
+/* ---------- карта пути ---------- */
+/* Липкая: шесть шагов дают экран длиннее нескольких прокруток, и карта нужна
+   именно тогда, когда до её обычного места надо ещё долистать. */
+.stage-board {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 22px 0 10px;
+    padding: 10px;
+    background: rgba(6, 24, 18, 0.92);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius);
+}
+
+.stage {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 150px;
+    padding: 7px 10px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: var(--text-dim);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.stage:hover { border-color: var(--card-border); }
+
+.stage-no {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--card-border);
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.stage-text { display: flex; flex-direction: column; line-height: 1.25; }
+.stage-text b { font-size: 13px; font-weight: 700; }
+.stage-text i { font-size: 11px; font-style: normal; opacity: 0.7; }
+
+/* Идёт — единственное состояние, которое должно притягивать взгляд. */
+.stage-running { color: var(--text); }
+.stage-running .stage-no {
+    border-color: var(--accent);
+    color: var(--accent);
+    animation: stage-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes stage-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.stage-ok { color: var(--text); }
+.stage-ok .stage-no {
+    border-color: var(--accent);
+    background: rgba(52, 211, 153, 0.15);
+    color: var(--accent);
+}
+
+/* Ниже порога — не ошибка, но и не приёмка: автор пошёл дальше своим решением,
+   и это должно быть видно на всех следующих шагах, а не только в момент выбора. */
+.stage-low { color: var(--text); }
+.stage-low .stage-no {
+    border-color: #f8b26a;
+    background: rgba(248, 178, 106, 0.15);
+    color: #f8b26a;
+}
+
+.stage-failed .stage-no {
+    border-color: #ef7a7a;
+    background: rgba(239, 122, 122, 0.15);
+    color: #ef7a7a;
+}
+
+@media (max-width: 640px) {
+    .stage { flex: 1 1 100%; }
+    .stage-text i { display: none; }
+}
+
 /* Подраздел внутри раздела описания. Разделы названы по Приложению А, а внутри
    у них своя разбивка — она должна читаться как часть раздела, а не спорить с
    ним за уровень. */

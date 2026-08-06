@@ -1001,6 +1001,7 @@ function renderOutro() {
             'все варианты игрового цикла, можно выбрать любой и проверить его ' +
             'аудитором и линзами. Конвейер отсюда не продолжается: сюжет ' +
             'строится только поверх модуля, принятого полным проходом.</p>' +
+        '<div id="stageBoard" class="stage-board" hidden></div>' +
         '<div class="gen-slot" id="genSlot"></div>' +
         '<div class="gen-slot" id="componentsBaseSlot"></div>' +
         '<div class="gen-slot" id="storySlot"></div>' +
@@ -1393,7 +1394,82 @@ const PIPE_STEP_TEXT = {
    писать результат и чем его рисовать. Всё остальное — постановка в очередь,
    опрос, отмена, повтор — общее, и дублировать его на каждый новый этап
    конвейера значило бы чинить потом в трёх местах. */
+/* ---------- карта пути ---------- */
+/* Шесть шагов идут в отдельных блоках друг под другом, и на третьем-четвёртом
+   экран уже длиннее двух прокруток. Без карты понять, где ты и что осталось,
+   можно было только листая: сами блоки про соседей ничего не знают. */
+
+const PIPELINE_STAGES = [
+    { id: 'mechanics', label: 'Механики',    hint: 'игровой цикл',           slot: 'genSlot' },
+    { id: 'story',     label: 'Сюжет',       hint: 'название и история',     slot: 'storySlot' },
+    { id: 'features',  label: 'Особенности', hint: 'концепция и приёмы',     slot: 'featuresSlot' },
+    { id: 'rules',     label: 'Правила',     hint: 'как играть',             slot: 'rulesSlot' },
+    { id: 'package',   label: 'Упаковка',    hint: 'описание и game_spec',   slot: 'packageSlot' },
+    { id: 'verdict',   label: 'Разбор',      hint: 'проверка игры целиком',  slot: 'verdictSlot' }
+];
+
+/* Состояния разные не для красоты. «Принят» и «ниже порога» — это принципиально
+   разные исходы: во втором случае автор пошёл дальше СВОИМ решением, и знать об
+   этом он должен на каждом следующем шаге, а не только в тот момент, когда
+   нажимал кнопку. */
+const STAGE_MARKS = {
+    running: { mark: '…', title: 'идёт' },
+    ok:      { mark: '✓', title: 'принят' },
+    low:     { mark: '!', title: 'ниже порога, продолжено вашим решением' },
+    failed:  { mark: '✕', title: 'не удался' }
+};
+
+const stageState = {};
+
+function setStage(id, state) {
+    if (state) stageState[id] = state; else delete stageState[id];
+    renderStageBoard();
+}
+
+function clearStagesFrom(id) {
+    /* Пересобрали шаг — всё, что стояло на нём, больше к нему не относится.
+       Ровно то же делает clearSlots с блоками; карта обязана согласоваться с
+       ними, иначе покажет принятым то, чего на экране уже нет. */
+    const from = PIPELINE_STAGES.findIndex(function(s) { return s.id === id; });
+    if (from < 0) return;
+    PIPELINE_STAGES.slice(from).forEach(function(s) { delete stageState[s.id]; });
+    renderStageBoard();
+}
+
+function renderStageBoard() {
+    const board = document.getElementById('stageBoard');
+    if (!board) return;
+
+    const started = Object.keys(stageState).length > 0;
+    board.hidden = !started;
+    if (!started) { board.innerHTML = ''; return; }
+
+    board.innerHTML = PIPELINE_STAGES.map(function(stage, i) {
+        const state = stageState[stage.id];
+        const info = STAGE_MARKS[state];
+        return '<button class="stage' + (state ? ' stage-' + state : '') +
+                '" type="button" data-slot="' + stage.slot + '"' +
+                ' title="' + esc(info ? info.title : 'ещё не начат') + '">' +
+            '<span class="stage-no">' + (info ? info.mark : (i + 1)) + '</span>' +
+            '<span class="stage-text">' +
+                '<b>' + esc(stage.label) + '</b>' +
+                '<i>' + esc(stage.hint) + '</i>' +
+            '</span>' +
+        '</button>';
+    }).join('');
+
+    board.querySelectorAll('.stage').forEach(function(button) {
+        button.onclick = function() {
+            const slot = document.getElementById(button.getAttribute('data-slot'));
+            if (slot && slot.innerHTML.trim()) {
+                slot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        };
+    });
+}
+
 const MECHANICS_PASS = {
+    stage: 'mechanics',
     slotId: 'genSlot',
     btnId: 'pipeBtn',
     url: 'api/pipeline/mechanics',
@@ -1406,6 +1482,7 @@ const MECHANICS_PASS = {
 };
 
 const STORY_PASS = {
+    stage: 'story',
     slotId: 'storySlot',
     btnId: 'storyBtn',
     url: 'api/pipeline/story',
@@ -1425,6 +1502,7 @@ const STORY_PASS = {
 };
 
 const FEATURES_PASS = {
+    stage: 'features',
     slotId: 'featuresSlot',
     btnId: 'featuresBtn',
     url: 'api/pipeline/features',
@@ -1445,6 +1523,7 @@ const FEATURES_PASS = {
 };
 
 const RULES_PASS = {
+    stage: 'rules',
     slotId: 'rulesSlot',
     btnId: 'rulesBtn',
     url: 'api/pipeline/rules',
@@ -1463,6 +1542,7 @@ const RULES_PASS = {
 };
 
 const PACKAGE_PASS = {
+    stage: 'package',
     slotId: 'packageSlot',
     btnId: 'packageBtn',
     url: 'api/pipeline/package',
@@ -1483,6 +1563,7 @@ const PACKAGE_PASS = {
 };
 
 const VERDICT_PASS = {
+    stage: 'verdict',
     slotId: 'verdictSlot',
     btnId: 'verdictBtn',
     url: 'api/pipeline/verdict',
@@ -1517,6 +1598,7 @@ function runPipeline(hardConflicts) {
        которого уже нет. */
     mechanicsJobId = null;
     mechanicsPassed = false;
+    clearStagesFrom('mechanics');
     clearSlots(['componentsBaseSlot', 'storySlot', 'featuresSlot',
                 'componentsFinalSlot', 'rulesSlot', 'packageSlot',
                 'verdictSlot']);
@@ -1535,6 +1617,7 @@ function runStory() {
        они ссылались на другие названия и другую историю. */
     storyJobId = null;
     storyPassed = false;
+    clearStagesFrom('story');
     clearSlots(['featuresSlot', 'componentsFinalSlot', 'rulesSlot',
                 'packageSlot', 'verdictSlot']);
 
@@ -1552,6 +1635,7 @@ function runFeatures() {
     /* Особенности пересобираются — прежние правила излагали другую игру. */
     featuresJobId = null;
     featuresPassed = false;
+    clearStagesFrom('features');
     clearSlots(['rulesSlot', 'packageSlot', 'verdictSlot']);
 
     startPass(FEATURES_PASS);
@@ -1568,6 +1652,7 @@ function runRules() {
     rulesJobId = null;
     rulesPassed = false;
     packedSpec = null;
+    clearStagesFrom('rules');
     clearSlots(['packageSlot', 'verdictSlot']);
 
     startPass(RULES_PASS);
@@ -1582,6 +1667,7 @@ function runPackage() {
     }
     /* Игра пересобирается — прежний разбор относился к другой спецификации. */
     packageJobId = null;
+    clearStagesFrom('package');
     clearSlots(['verdictSlot']);
 
     startPass(PACKAGE_PASS);
@@ -1623,6 +1709,7 @@ function startPass(pass) {
     piping = true;
     btn.disabled = true;
     btn.textContent = pass.busyLabel;
+    setStage(pass.stage, 'running');
 
     fetch(pass.url, {
         method: 'POST',
@@ -1632,6 +1719,7 @@ function startPass(pass) {
         return response.json();
     }).then(function(body) {
         if (!body || body.error || !body.job_id) {
+            setStage(pass.stage, 'failed');
             passStop(pass, genErrorHtml(body || { error: 'Пустой ответ' }));
             return;
         }
@@ -1705,6 +1793,7 @@ function passPoll(pass, jobId, started) {
             misses = 0;
 
             if (!body || body.error && !body.status) {
+                setStage(pass.stage, 'failed');
                 passStop(pass, lensFailHtml(body || { error: 'Пустой ответ' }));
                 bindPassRetry(pass);
                 return;
@@ -1731,6 +1820,14 @@ function passPoll(pass, jobId, started) {
                         packageJobId = jobId;
                     }
                 }
+                /* «Принят» и «ниже порога» — разные исходы, и карта обязана их
+                   различать: во втором случае автор пошёл дальше своим
+                   решением, и помнить об этом нужно на всех следующих шагах.
+                   У шагов без балла (упаковка) порога нет вовсе — там «принят»
+                   означает просто «сделано». */
+                setStage(pass.stage,
+                         (body.result && body.result.scored === false) ||
+                         (body.result && body.result.passed) ? 'ok' : 'low');
                 passStop(pass, pass.render(body.result));
                 bindNextStage();
                 if (pass === PACKAGE_PASS && body.result) {
@@ -1745,6 +1842,7 @@ function passPoll(pass, jobId, started) {
                 return;
             }
             if (body.status === 'failed') {
+                setStage(pass.stage, 'failed');
                 passStop(pass, lensFailHtml({ error: body.error }));
                 bindPassRetry(pass);
                 return;
