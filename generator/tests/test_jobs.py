@@ -186,3 +186,40 @@ def test_время_шага_отдельно_от_общего():
     assert state["step_elapsed"] < state["elapsed"]
     release.set()
     wait(job_id)
+
+
+def test_завершённая_задача_переживает_рабочий_сеанс():
+    """Срок жизни задачи — это срок жизни ЦЕПОЧКИ, а не открытой вкладки.
+
+    Завершённая задача служит входом следующего этапа: сюжет строится по
+    mechanics_job_id, особенности по нему же и story_job_id, и так до упаковки.
+    Прежние полчаса означали: собрал механики, полчаса обсуждал результат — и
+    «задача не найдена», продолжить нельзя, оплаченная цепочка потеряна.
+    """
+    assert jobs.TTL_SECONDS >= 4 * 60 * 60, "цепочка не переживёт рабочий сеанс"
+
+
+def test_старая_задача_всё_же_забывается():
+    """Иначе очередь растёт без предела: в задаче лежат модули игры."""
+    job_id = jobs.submit(lambda progress: {"ок": True})
+    wait(job_id)
+
+    with jobs._lock:
+        jobs._jobs[job_id]["finished_at"] -= jobs.TTL_SECONDS + 1
+        jobs._forget_old()
+
+    assert jobs.status(job_id) is None
+
+
+def test_свежая_задача_не_забывается_при_уборке():
+    старая = jobs.submit(lambda progress: {"ок": True})
+    wait(старая)
+    свежая = jobs.submit(lambda progress: {"ок": True})
+    wait(свежая)
+
+    with jobs._lock:
+        jobs._jobs[старая]["finished_at"] -= jobs.TTL_SECONDS + 1
+        jobs._forget_old()
+
+    assert jobs.status(старая) is None
+    assert jobs.status(свежая) is not None

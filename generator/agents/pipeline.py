@@ -220,6 +220,12 @@ def run_packaging(params, progress, modules, components, rules_variant,
         out = packaging.assemble(params, modules, components, rules_variant)
     except packaging.PackagingError as error:
         raise PipelineError(str(error)) from error
+    except llm.LLMError as error:
+        # Тот же недосмотр, что был в проходах модулей: ловился только «свой»
+        # класс ошибки, а сбой обращения к модели уходил наверх необёрнутым и
+        # без указания, ГДЕ он случился. Здесь это особенно дорого: к упаковке
+        # автор приходит с четырьмя принятыми модулями.
+        raise PipelineError("Упаковка не выполнена: %s" % error) from error
 
     out.update({
         "phase": "package",
@@ -250,6 +256,12 @@ def run_verdict(params, progress, spec_root, built_on=None):
         out = verdict.evaluate(spec_root, progress=progress)
     except verdict.VerdictError as error:
         raise PipelineError(str(error)) from error
+    except llm.LLMError as error:
+        # Симметрия с остальными шагами. Сам разбор к модели не ходит — он зовёт
+        # ФинИгроСкоп, — но полагаться на это значит оставить единственный шаг
+        # конвейера, у которого сбой модели уйдёт наверх необёрнутым и без
+        # указания, где он случился.
+        raise PipelineError("Итоговый разбор не выполнен: %s" % error) from error
 
     if not out.get("ok"):
         raise PipelineError("Итоговый разбор не выполнен: %s"

@@ -548,12 +548,27 @@ def assemble(params, modules, components, rules_variant, attempts=MAX_ATTEMPTS):
     previous = None
 
     for attempt in range(1, attempts + 1):
-        result = llm.complete_json(
-            [{"role": "system", "content": SYSTEM_PROMPT},
-             {"role": "user", "content": build_user_message(
-                 params, mechanics, story, critique, previous)}],
-            # Перевод, а не сочинение: разнообразие здесь только вредит.
-            tier="flash", temperature=0.1, max_tokens=2000)
+        try:
+            result = llm.complete_json(
+                [{"role": "system", "content": SYSTEM_PROMPT},
+                 {"role": "user", "content": build_user_message(
+                     params, mechanics, story, critique, previous)}],
+                # Перевод, а не сочинение: разнообразие здесь только вредит.
+                tier="flash", temperature=0.1, max_tokens=4000)
+        except llm.BadAnswer as error:
+            # Модель ответила, но ответ негодный: оборван, не JSON, испорчен по
+            # дороге. Это ровно то, ради чего у упаковки есть попытки, — тратим
+            # одну и пробуем снова.
+            #
+            # Упаковка не идёт через общий проход конвейера, поэтому такая же
+            # починка в pipeline её НЕ покрыла: один оборванный ответ убивал её
+            # целиком, хотя цикл попыток был тут же, строкой ниже. И это худшее
+            # место для такого: к упаковке автор приходит с четырьмя принятыми
+            # модулями, то есть с оплаченной работой всего конвейера.
+            critique = ["Предыдущий ответ не удалось разобрать: %s" % error]
+            log.append({"attempt": attempt, "problems": critique, "warnings": [],
+                        "usage": {}})
+            continue
 
         data = result["data"]
         problems, warnings = validate(data, params, mechanics, components)

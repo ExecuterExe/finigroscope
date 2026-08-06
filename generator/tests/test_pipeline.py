@@ -797,3 +797,56 @@ def test_отказ_сети_по_прежнему_прекращает_прох
         pipeline.run(PARAMS, Progress())
 
     assert fakes.calls["generate"] == 1, "проход продолжился при отказе сети"
+
+
+# --------------------------------------------------------------------------
+# Ни один шаг не выпускает сырое исключение
+# --------------------------------------------------------------------------
+
+МОДУЛЬ = {"variant_id": 1, "title": "Т", "game_loop": {"turn_structure": ["ход"]},
+          "win_condition": {"description": "собрать"},
+          "required_component_types": ["карты"]}
+
+
+def бяка(*args, **kwargs):
+    raise pipeline.llm.BadAnswer("ответ оборван")
+
+
+ШАГИ = [
+    ("mechanics", "mechanics", "generate",
+     lambda p: pipeline.run(p, Progress())),
+    ("story", "story", "generate",
+     lambda p: pipeline.run_story(p, Progress(), МОДУЛЬ)),
+    ("features", "features", "generate",
+     lambda p: pipeline.run_features(p, Progress(), МОДУЛЬ, МОДУЛЬ)),
+    ("rules", "rules", "generate",
+     lambda p: pipeline.run_rules(p, Progress(),
+                                  {"mechanics": МОДУЛЬ, "story": МОДУЛЬ,
+                                   "features": МОДУЛЬ}, [])),
+    ("packaging", "packaging", "assemble",
+     lambda p: pipeline.run_packaging(p, Progress(), {"mechanics": МОДУЛЬ},
+                                      [], МОДУЛЬ)),
+    ("verdict", "verdict", "evaluate",
+     lambda p: pipeline.run_verdict(p, Progress(),
+                                    {"game_spec": {"core": {"x": 1}}})),
+]
+
+
+@pytest.mark.parametrize("имя,модуль,функция,запуск", ШАГИ,
+                         ids=[s[0] for s in ШАГИ])
+def test_ни_один_шаг_не_выпускает_сырое_исключение(monkeypatch, имя, модуль,
+                                                   функция, запуск):
+    """Сбой модели на ЛЮБОМ шаге обязан дойти до автора объяснением.
+
+    Упаковка и разбор ловили только «свой» класс ошибки, и сбой обращения к
+    модели уходил наверх необёрнутым — очередь показывала одно имя класса.
+    Для упаковки это особенно дорого: к ней приходят с четырьмя принятыми
+    модулями, то есть с оплаченной работой всего конвейера.
+    """
+    monkeypatch.setattr(getattr(pipeline, модуль), функция, бяка)
+
+    with pytest.raises(pipeline.PipelineError) as error:
+        запуск(PARAMS)
+
+    текст = str(error.value)
+    assert "оборван" in текст, "причина потеряна: " + текст
