@@ -222,7 +222,7 @@ def _ensure_blank_line_around_tables(text: str) -> str:
 def inject_job_helpers():
     """Подсказки о шагах — чтобы плашка прогресса не хардкодила их в разметке."""
     return {"job_hint": jobs.step_hint, "job_title": jobs.step_title,
-            "job_retry": jobs.retry_endpoint}
+            "job_retry": jobs.retry_endpoint, "job_usual": jobs.step_usual}
 
 
 @app.template_filter("markdown")
@@ -1331,7 +1331,14 @@ def balance(doc_id, game_index):
         # не место, иначе автор видит предложение вместо идентификатора.
         soft=stats_agent.soft_actions((root or {}).get("diagnostic_meta"),
                                       _subjective_actions(root, sk)),
-        job=jobs.latest(doc_id, game_index, "balance"),
+        # На экране показываем ту задачу, которая сейчас имеет значение: пока
+        # идёт прогон скелета — его, после него — оценку статистики. Иначе
+        # прогон, ушедший в очередь, не показал бы вообще ничего: экран смотрел
+        # только на шаг «balance».
+        job=(jobs.active(doc_id, game_index, "local_run")
+             or jobs.active(doc_id, game_index, "balance")
+             or jobs.latest(doc_id, game_index, "balance")
+             or jobs.latest(doc_id, game_index, "local_run")),
     )
 
 
@@ -1351,29 +1358,41 @@ def balance_stats(doc_id, game_index):
     if request.form.get("action") == "run_local":
         # Единственное место, где сервис выполняет код, написанный моделью, и
         # только по явному нажатию автора — см. предупреждения в simulation/runner.
-        outcome = sim_runner.run_skeleton(sk.code)
-        if not outcome.get("ok"):
-            br.error = outcome.get("error") or "Не удалось прогнать скелет."
-            db.session.commit()
-            flash("Прогон скелета не удался — подробности на странице.", "error")
-            return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
-        stats, source = outcome["stats"], BalanceReport.SOURCE_LOCAL
-        diag = outcome.get("diag")
-    else:
-        # Принимаем ВЕСЬ вывод консоли, а не вырезанный кусок: у скелета два
-        # блока, и просьба скопировать «нужный» стабильно теряла DIAG_JSON.
-        parsed = sim_runner.parse_pasted_output(request.form.get("stats"))
-        if parsed["error"]:
-            flash(parsed["error"], "error")
-            return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
-        stats, diag = parsed["stats"], parsed["diag"]
-        source = BalanceReport.SOURCE_PASTED
-        if diag is None:
-            flash("Статистика принята, но блока DIAG_JSON в тексте не было. Числовая "
-                  "оценка пройдёт полностью, а вот диагносту не хватит данных для части "
-                  "тестов — они получат честное «не выполнен». Если DIAG_JSON есть в "
-                  "выводе, вставьте текст целиком.", "warning")
+        #
+        # Прогон уехал в очередь. Раньше он шёл прямо здесь, и это был последний
+        # шаг сервиса, где человек ждал БЕЗ ЕДИНОГО признака работы: до двух
+        # минут браузер просто крутил вкладку, а плашка прогресса на экран не
+        # попадала, потому что задачи не существовало. Считает тут процессор, а
+        # не модель, но ждущему это безразлично.
+        jobs.submit(doc_id, game_index, "local_run",
+                    _local_run_job(doc_id, game_index))
+        return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
 
+    # Принимаем ВЕСЬ вывод консоли, а не вырезанный кусок: у скелета два блока,
+    # и просьба скопировать «нужный» стабильно теряла DIAG_JSON.
+    parsed = sim_runner.parse_pasted_output(request.form.get("stats"))
+    if parsed["error"]:
+        flash(parsed["error"], "error")
+        return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
+
+    if parsed["diag"] is None:
+        flash("Статистика принята, но блока DIAG_JSON в тексте не было. Числовая "
+              "оценка пройдёт полностью, а вот диагносту не хватит данных для части "
+              "тестов — они получат честное «не выполнен». Если DIAG_JSON есть в "
+              "выводе, вставьте текст целиком.", "warning")
+
+    _save_stats(doc_id, game_index, br, parsed["stats"], parsed["diag"],
+                BalanceReport.SOURCE_PASTED)
+    return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
+
+
+def _save_stats(doc_id, game_index, br, stats, diag, source):
+    """Сохраняет статистику и заказывает её оценку.
+
+    Общее для обоих источников — вставки и локального прогона. Пока путей было
+    два и каждый делал это по-своему, они успели разойтись: у одного оценка
+    заказывалась явно, у другого — нет.
+    """
     br.stats_json = json.dumps(stats, ensure_ascii=False)
     # DIAG_JSON сохраняем отдельно: его читает агент-диагност, «Оценщику
     # статистик» он не подаётся. None (вставка вручную) — это не пустота, а
@@ -1394,7 +1413,31 @@ def balance_stats(doc_id, game_index):
                 lambda job_id=None: _run_stats_evaluation(
                     doc_id, game_index, _balance_report(doc_id, game_index)))
 
-    return redirect(url_for("balance", doc_id=doc_id, game_index=game_index))
+
+def _local_run_job(doc_id, game_index):
+    """Тело задачи локального прогона: выполнить скелет и сохранить статистику.
+
+    Ошибку прогона кладём в `br.error`, а не роняем задачу: экран показывает её
+    тем же местом, что и раньше, и автор видит текст падения скелета, а не
+    «шаг не выполнился».
+    """
+    def run(job_id=None):
+        sk = GameSkeleton.query.filter_by(
+            document_id=doc_id, game_index=game_index).first()
+        br = _balance_report(doc_id, game_index)
+        if sk is None or not sk.code:
+            br.error = "Скелет не собран — прогонять нечего."
+            return
+
+        outcome = sim_runner.run_skeleton(sk.code)
+        if not outcome.get("ok"):
+            br.error = outcome.get("error") or "Не удалось прогнать скелет."
+            return
+
+        _save_stats(doc_id, game_index, br, outcome["stats"],
+                    outcome.get("diag"), BalanceReport.SOURCE_LOCAL)
+
+    return run
 
 
 @app.route("/documents/<int:doc_id>/balance/<int:game_index>/retry", methods=["POST"])

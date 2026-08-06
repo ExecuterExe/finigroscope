@@ -392,6 +392,63 @@ checks["устаревший маркер убран"] = R.LEGACY_MARKER not in 
 checks["названы оба нужных блока"] = "STATS_JSON" in intake and "DIAG_JSON" in intake
 checks["локальный прогон на виду"] = "Прогнать скелет локально" in intake
 
+
+# ============================================================================
+# Локальный прогон скелета — теперь через очередь
+# ============================================================================
+# Раньше он шёл прямо в обработчике запроса: до двух минут человек ждал вообще
+# без признаков работы, потому что задачи не существовало и плашка прогресса на
+# экран не попадала. Сам прогон подменён — проверяется путь, а не выполнение
+# чужого кода.
+import jobs  # noqa: E402
+from simulation import runner as sim_runner  # noqa: E402
+
+прогонов = {"n": 0}
+
+
+def прогон_заглушка(code, timeout=None):
+    прогонов["n"] += 1
+    return {"ok": True, "stats": STATS, "diag": {"ties": 0}}
+
+
+A.sim_runner.run_skeleton = прогон_заглушка
+
+before = calls["eval"]
+cl.post(f"/documents/{doc_id}/balance/1/stats", data={"action": "run_local"},
+        follow_redirects=True)
+
+with A.app.app_context():
+    run_job = jobs.latest(doc_id, 1, "local_run")
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=1).first()
+    checks["прогон стал задачей"] = run_job is not None
+    checks["задача завершилась"] = run_job.status == jobs.Job.DONE
+    checks["скелет прогнан один раз"] = прогонов["n"] == 1
+    checks["статистика сохранена"] = len(br.stats() or []) == len(STATS)
+    checks["источник — локальный прогон"] = br.stats_source == BalanceReport.SOURCE_LOCAL
+    checks["DIAG сохранён"] = bool(br.diag())
+    checks["оценка заказана следом"] = calls["eval"] == before + 1
+
+# Сбой прогона не роняет задачу: текст падения принадлежит скелету, и автор
+# должен увидеть его, а не «шаг не выполнился».
+A.sim_runner.run_skeleton = lambda code, timeout=None: {
+    "ok": False, "error": "SyntaxError в скелете"}
+with A.app.app_context():
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=1).first()
+    br.stats_json = br.report_json = None
+    db.session.commit()
+
+cl.post(f"/documents/{doc_id}/balance/1/stats", data={"action": "run_local"},
+        follow_redirects=True)
+with A.app.app_context():
+    run_job = jobs.latest(doc_id, 1, "local_run")
+    br = BalanceReport.query.filter_by(document_id=doc_id, game_index=1).first()
+    checks["сбой прогона не роняет задачу"] = run_job.status == jobs.Job.DONE
+    checks["текст падения виден автору"] = "SyntaxError" in (br.error or "")
+
+# Шаг обязан быть описан для экрана: без названия и ориентира плашка молчит.
+checks["у шага есть название"] = jobs.step_title("local_run") != "local_run"
+checks["у шага есть ориентир"] = jobs.step_usual("local_run") > 0
+
 for label, ok in checks.items():
     print(("OK  " if ok else "FAIL") + " | " + label)
 assert all(checks.values()), "часть проверок провалилась"

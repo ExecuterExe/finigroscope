@@ -2,22 +2,32 @@
        {% include "_job.html" %}
    и ждёт в контексте переменную `job` (может быть None).
 
-   Прогресс здесь ТЕКСТОВЫЙ, без полосы с процентами. Сколько процентов занял
-   вызов модели, не знает никто — ни мы, ни провайдер; рисовать ползущую полосу
-   значило бы придумывать число. Вместо этого показываем, что именно идёт,
-   сколько уже длится и сколько это обычно занимает. #}
+   Полоса здесь БЕЗ ПРОЦЕНТОВ, и это принципиально. Сколько процентов занял
+   вызов модели, не знает никто — ни мы, ни провайдер; ползущая до 90% и
+   замирающая полоска показывала бы придуманное число и врала бы тем убедительнее,
+   чем дольше идёт шаг. Поэтому полоса неопределённая: она сообщает ровно один
+   факт — «работа идёт», — и этого достаточно, чтобы отличить живой сервис от
+   зависшего. Всё измеримое рядом словами: что именно идёт, сколько уже длится
+   и сколько это обычно занимает. #}
 {% if job %}
 {% if job.is_active %}
-<div class="job-card" id="job-card" data-job-url="{{ url_for('job_status', job_id=job.id) }}">
+<div class="job-card" id="job-card" data-job-url="{{ url_for('job_status', job_id=job.id) }}"
+     data-job-usual="{{ job_usual(job.step) }}">
     <div class="job-head">
         <span class="job-spinner" aria-hidden="true"></span>
         <span class="job-title">{{ job.stage or job.step }}</span>
         <span class="job-status" id="job-elapsed">{{ '%.0f' | format(job.duration or 0) }} с</span>
     </div>
+    <div class="job-bar" role="progressbar" aria-label="Шаг выполняется"
+         aria-busy="true"><span></span></div>
     <div class="job-note">
         {{ job_hint(job.step) }}. Страница обновится сама — можно закрыть вкладку
         и вернуться позже, шаг продолжит считаться на сервере.
     </div>
+    {# Честная строка про затянувшийся шаг. Появляется только когда он и правда
+       идёт дольше обычного: молчать в этот момент — ровно то, из-за чего
+       возникает вопрос «сервис ещё жив?». #}
+    <div class="job-note job-note-long" id="job-long" hidden></div>
     {% if job.cancel_requested %}
     <div class="job-note job-note-warn">
         Остановка запрошена — прервёмся после текущего обращения к модели.
@@ -37,12 +47,26 @@
     var card = document.getElementById("job-card");
     if (!card) return;
     var url = card.dataset.jobUrl;
+    var usual = parseInt(card.dataset.jobUsual, 10) || 0;
     var started = Date.now();
     var elapsed = document.getElementById("job-elapsed");
+    var longNote = document.getElementById("job-long");
     var base = parseInt(elapsed.textContent, 10) || 0;
 
     setInterval(function () {
-        elapsed.textContent = (base + Math.round((Date.now() - started) / 1000)) + " с";
+        var seconds = base + Math.round((Date.now() - started) / 1000);
+        elapsed.textContent = seconds + " с";
+
+        // Затянувшийся шаг называем вслух. Сказать «идёт дольше обычного»
+        // честнее, чем показывать ту же спокойную строку на пятой минуте:
+        // человек всё равно это заметит, а молчание он прочитает как поломку.
+        if (usual && seconds > usual && longNote && longNote.hidden) {
+            longNote.hidden = false;
+            longNote.textContent =
+                "Идёт дольше обычного (" + usual + " с). Это не сбой: модель " +
+                "может отвечать медленно, а при перегрузке провайдера запрос " +
+                "повторяется. Шаг всё ещё выполняется.";
+        }
     }, 1000);
 
     (function poll() {

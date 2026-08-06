@@ -26,6 +26,66 @@ body {
     display: flex;
     flex-direction: column;
     line-height: 1.55;
+    /* overflow-x: hidden здесь НЕ нужен, хотя напрашивается: пятна свечения
+       позиционированы fixed и области прокрутки не расширяют (проверено
+       замером). А обрезка молча резала бы широкие таблицы аудита и покрытия
+       вместо того, чтобы дать их прокрутить. */
+}
+
+/* ---------- фоновое свечение ----------
+   Два размытых пятна по углам, как у «Генератора игр», — экосистема должна
+   узнаваться. Сделаны псевдоэлементами body, а не разметкой: правка одного
+   файла вместо десяти шаблонов, и ни один экран не может забыть их подключить.
+
+   Приглушены сильнее, чем у генератора (0.14 и 0.09 против 0.2 и 0.12). Там
+   опросник с крупными карточками, здесь — плотные таблицы аудита и отчёты, и
+   подсветка, красивая на пустом экране, мешает читать колонку чисел. */
+body::before,
+body::after {
+    content: "";
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(110px);
+    pointer-events: none;
+    z-index: 0;
+}
+
+body::before {
+    width: 460px;
+    height: 460px;
+    top: -150px;
+    left: -130px;
+    background: var(--blue-500);
+    opacity: 0.14;
+    animation: fg-drift 22s ease-in-out infinite alternate;
+}
+
+body::after {
+    width: 420px;
+    height: 420px;
+    bottom: -170px;
+    right: -110px;
+    background: var(--accent);
+    opacity: 0.09;
+    animation: fg-drift 26s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes fg-drift {
+    from { transform: translate(0, 0); }
+    to   { transform: translate(40px, 30px); }
+}
+
+/* Содержимое — над свечением. Без этого пятна легли бы поверх таблиц: у них
+   z-index 0, а у обычных потомков — auto. */
+.site-header,
+main,
+.site-footer,
+.flash-stack { position: relative; z-index: 1; }
+
+/* «Меньше движения» — гасим только дрейф. Сами пятна остаются: это фон, а не
+   индикатор, и от их неподвижности ничего не теряется. */
+@media (prefers-reduced-motion: reduce) {
+    body::before, body::after { animation: none; }
 }
 
 main { flex: 1 0 auto; }
@@ -993,8 +1053,10 @@ a { color: var(--accent-soft); text-decoration: none; }
 }
 
 /* ---------- фоновые задачи: плашка идущего шага ---------- */
-/* Прогресс намеренно текстовый: сколько процентов занял вызов модели, не знает
-   никто, и ползущая полоса была бы выдуманным числом. */
+/* Полоса намеренно БЕЗ ПРОЦЕНТОВ: сколько процентов занял вызов модели, не
+   знает никто, и заполняющаяся шкала показывала бы выдуманное число. Здесь она
+   неопределённая — сообщает ровно один факт, «работа идёт». Всё измеримое
+   (что именно, сколько уже, сколько обычно) стоит рядом словами. */
 .job-card {
     margin: 0 0 18px; padding: 14px 18px; border-radius: 14px;
     background: rgba(77,159,255,0.07); border: 1px solid rgba(77,159,255,0.3);
@@ -1013,6 +1075,47 @@ a { color: var(--accent-soft); text-decoration: none; }
     animation: job-spin 0.9s linear infinite;
 }
 @keyframes job-spin { to { transform: rotate(360deg); } }
-/* Уважаем системную настройку «меньше движения»: крутилка — украшение, а не
-   носитель смысла, время шага показано текстом рядом. */
-@media (prefers-reduced-motion: reduce) { .job-spinner { animation: none; } }
+
+/* Неопределённая полоса: бегунок ходит по дорожке, ничего не заполняя. Именно
+   поэтому у неё нет aria-valuenow — значения нет и придумывать его нельзя;
+   скринридеру достаточно aria-busy на элементе. */
+.job-bar {
+    position: relative;
+    height: 4px;
+    margin-top: 12px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(77,159,255,0.16);
+}
+.job-bar > span {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 38%;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+        rgba(77,159,255,0) 0%, var(--accent) 50%, rgba(77,159,255,0) 100%);
+    animation: job-slide 1.6s ease-in-out infinite;
+}
+@keyframes job-slide {
+    0%   { left: -40%; }
+    100% { left: 100%; }
+}
+
+/* Шаг идёт дольше обычного. Цвет спокойный: это не ошибка, а факт. */
+.job-note-long { color: #ffd47a; }
+
+/* Кнопка, запустившая шаг. Между нажатием и появлением плашки проходит
+   секунда-другая, и без этой пометки нажатие выглядит непонятым — человек жмёт
+   второй раз. Повторную отправку это же и предотвращает. */
+.is-busy {
+    opacity: 0.65;
+    pointer-events: none;
+}
+
+/* Уважаем системную настройку «меньше движения»: и крутилка, и бегунок —
+   украшение, а не носитель смысла. Время шага и его название показаны текстом,
+   поэтому без движения плашка ничего не теряет. */
+@media (prefers-reduced-motion: reduce) {
+    .job-spinner { animation: none; }
+    .job-bar > span { animation: none; left: 0; width: 100%; opacity: 0.5; }
+}

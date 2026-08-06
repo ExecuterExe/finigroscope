@@ -2270,14 +2270,21 @@ function verdictHtml(result) {
             '<span class="badge' + (passed ? ' success' : '') + '">' +
                 (passed ? 'Игра принята' : 'Лучшее из полученного') +
             '</span>' +
-            '<h3 class="gen-title">Итоговый балл ' +
-                '<b class="' + (passed ? 'pipe-ok' : 'pipe-low') + '">' +
+            /* Балл — ответ на весь конвейер, и набран он соответственно.
+               Раньше это была строка того же кегля, что и всё вокруг: число,
+               ради которого прошли шесть этапов, терялось в тексте. */
+            '<div class="verdict-score">' +
+                '<span class="verdict-number ' +
+                    (passed ? 'pipe-ok' : 'pipe-low') + '">' +
                     (score === null || score === undefined ? '—' : esc(score)) +
-                '</b> из 10' +
-                (result.threshold !== undefined && result.threshold !== null
-                    ? ' <span class="lens-clock">порог ' + esc(result.threshold) +
-                      '</span>' : '') +
-            '</h3>' +
+                '</span>' +
+                '<span class="verdict-meta">' +
+                    '<span class="verdict-of">из 10</span>' +
+                    (result.threshold !== undefined && result.threshold !== null
+                        ? '<span class="verdict-threshold">порог ' +
+                          esc(result.threshold) + '</span>' : '') +
+                '</span>' +
+            '</div>' +
             '<p class="gen-note">' + esc(result.verdict || '') + '</p>' +
         '</div>';
 
@@ -2452,6 +2459,9 @@ function rulesCardHtml(variant) {
             }).join('') + '</ul></div>';
     }
 
+    html += serviceBlock('Рабочие сведения модуля: обоснование и риски',
+                         serviceRationale(variant));
+
     return html + '</div>';
 }
 
@@ -2490,10 +2500,49 @@ function featuresCardHtml(variant) {
             '<p>' + esc(value) + '</p></div>';
     });
 
+    html += serviceBlock('Рабочие сведения модуля: обоснование и риски',
+                         serviceRationale(variant));
+
     return html + '</div>';
 }
 
 /* ---------- общее для этапов ---------- */
+
+/* «Рабочие сведения» — свёрнутый блок под карточкой модуля.
+
+   Зачем он отдельно от описания. Обоснование выбора и риски — это разговор
+   агента с конвейером, а не часть игры: в готовое описание по Приложению А они
+   не входят и попасть не должны. Но и выбрасывать их нельзя — по ним видно,
+   почему модуль получился таким. Свёрнутый блок отвечает на оба требования
+   сразу: в общем потоке не мешает, а раскрыть можно.
+
+   Собран один раз на все четыре модуля. Пока каждый писал его сам, у механик и
+   сюжета блок был, а у особенностей и правил — нет, и одно и то же вставало в
+   карточку по-разному. */
+function servicePart(title, body) {
+    return '<div class="section-part"><b>' + esc(title) + '</b>' + body + '</div>';
+}
+
+function serviceRationale(variant) {
+    let out = '';
+    if (variant.fit_rationale) {
+        out += servicePart('Почему подходит под ваши ответы',
+                           '<p>' + esc(variant.fit_rationale) + '</p>');
+    }
+    if ((variant.risks || []).length) {
+        out += servicePart('Риски', '<ul class="story-list">' +
+            variant.risks.map(function(r) {
+                return '<li>' + esc(r) + '</li>';
+            }).join('') + '</ul>');
+    }
+    return out;
+}
+
+function serviceBlock(summary, parts) {
+    if (!parts) return '';
+    return '<details class="story-service"><summary>' + esc(summary) +
+        '</summary>' + parts + '</details>';
+}
 
 /* На чём построен этап. Отдельным блоком, а не строкой среди предупреждений:
    модуль может взять свои 8 из 10 и всё равно стоять на механиках с баллом 4,
@@ -2664,16 +2713,7 @@ function mechanicsCardHtml(variant) {
         service += '<div class="section-part"><b>Оценки агента</b><p>' +
             facts.join(' · ') + '</p></div>';
     }
-    if (variant.fit_rationale) {
-        service += '<div class="section-part"><b>Почему подходит под ваши ответы' +
-            '</b><p>' + esc(variant.fit_rationale) + '</p></div>';
-    }
-    if ((variant.risks || []).length) {
-        service += '<div class="section-part"><b>Риски</b><ul class="story-list">' +
-            variant.risks.map(function(r) {
-                return '<li>' + esc(r) + '</li>';
-            }).join('') + '</ul></div>';
-    }
+    service += serviceRationale(variant);
     if (service) {
         html += '<details class="story-service"><summary>Рабочие сведения ' +
             'модуля: механики библиотеки, оценки, риски</summary>' +
@@ -2753,16 +2793,7 @@ function storyCardHtml(variant) {
             '<div class="variant-mech"><span class="chip">' +
             esc(variant.seed_id) + '</span></div></div>';
     }
-    if (variant.fit_rationale) {
-        service += '<div class="section-part"><b>Почему подходит под ваши ответы' +
-            '</b><p>' + esc(variant.fit_rationale) + '</p></div>';
-    }
-    if ((variant.risks || []).length) {
-        service += '<div class="section-part"><b>Риски</b><ul class="story-list">' +
-            variant.risks.map(function(r) {
-                return '<li>' + esc(r) + '</li>';
-            }).join('') + '</ul></div>';
-    }
+    service += serviceRationale(variant);
     if (service) {
         html += '<details class="story-service"><summary>Рабочие сведения ' +
             'модуля: завязка, обоснование, риски</summary>' + service + '</details>';
